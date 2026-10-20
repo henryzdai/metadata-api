@@ -110,19 +110,24 @@ For logs and coverage:
 ```
 
 This requires PowerShell 7. If Go is not on PATH, pass `-GoExecutable` with its path.
-Results are saved under `artifacts`. The recorded Windows run measured
-**91.5% statement coverage** across `internal` and `cmd`, excluding the separate
-E2E server process.
+Results are saved under `artifacts`.
 
-The CI workflow includes Linux race and SIGTERM checks. These remain unverified
-publicly. Locally, race detection lacked GCC and the SIGTERM case skipped on Windows.
+The [successful Linux CI run](https://github.com/henryzdai/metadata-api/actions/runs/39508357704)
+passed unit tests, shared storage contracts, real-process HTTP E2E, the race
+detector, and SIGTERM shutdown. It measured **91.3% statement coverage** across
+`internal` and `cmd`, excluding the separate E2E server process.
+
+On Windows, the SIGTERM test skips. To run the race detector locally, use
+`.\verify.ps1 -Race` with a supported C compiler.
 
 ## Status and effort
 
-The public repository is [henryzdai/metadata-api](https://github.com/henryzdai/metadata-api).
-The local MVP is implemented. A successful public Linux Actions run and the final
-delivery evidence remain pending.
+The MVP is published at [henryzdai/metadata-api](https://github.com/henryzdai/metadata-api).
+Implementation, review, documentation, and publication spanned about eight elapsed
+hours, including pauses. The initial prototype took about 1.5 hours of that span.
+These are elapsed spans, not person-hours.
 
-The initial AI-assisted prototype took about 1.5 elapsed hours. Later documentation,
-human review, and publishing are excluded. Work began before result-repository
-creation; that preparation is disclosed separately from the submission time window.
+AI-assisted prototyping preceded public repository creation. The commits record
+verified delivery milestones, not the original development chronology.
+The repository was created at `2026-10-20T21:29:30Z`. Its first Linux CI run was
+green by `2026-10-20T22:30:22Z`, inside the 24-hour submission window.

@@ -126,8 +126,3 @@ The MVP is published at [henryzdai/metadata-api](https://github.com/henryzdai/me
 Implementation, review, documentation, and publication spanned about eight elapsed
 hours, including pauses. The initial prototype took about 1.5 hours of that span.
 These are elapsed spans, not person-hours.
-
-AI-assisted prototyping preceded public repository creation. The commits record
-verified delivery milestones, not the original development chronology.
-The repository was created at `2026-10-20T21:29:30Z`. Its first Linux CI run was
-green by `2026-10-20T22:30:22Z`, inside the 24-hour submission window.

@@ -48,6 +48,27 @@ PUT and DELETE require `If-Match`; a stale condition is rejected rather than
 overwriting newer data. PUT returns the transformed body without an ETag.
 Strict JSON, bounded requests, and structured errors define the HTTP boundary.
 
+## Real-process tests
+
+Run the complete suite:
+
+```powershell
+go test .\... -count=1 -timeout=3m
+```
+
+The E2E tests build and start the server, then use HTTP to check CRUD, creator
+integrity, concurrent conditional writes, restart behavior, and bounded failures.
+They use isolated temporary data and stop their child processes.
+
+Run the conflict-and-restart scenario on its own:
+
+```powershell
+go test .\e2e -run TestConcurrentWritersAcrossRestart -count=1 -v
+```
+
+SQLite retains committed data across a process restart. Memory does not.
+The SIGTERM process test requires Linux and skips on Windows.
+
 ## Development note
 
 The source was prototyped with AI assistance before this public repository was

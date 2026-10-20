@@ -1,0 +1,8 @@
+/bin/
+/data/
+/artifacts/
+/.local/
+/coverage.out
+/metadata-server
+/*.exe
+.test-work/

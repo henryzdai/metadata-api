@@ -1,0 +1,486 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Metadata API",
+    "version": "0.1.0",
+    "description": "Application and Maintainer CRUD. Each application has one immutable creator. Mutations require resource-specific strong If-Match validators. Strings are trimmed and field limits are measured in UTF-8 bytes. Unknown input fields and unsupported or repeated query parameters are rejected. This prototype has no authentication and binds to loopback by default."
+  },
+  "servers": [{"url": "http://127.0.0.1:8080"}],
+  "tags": [{"name": "Maintainers"}, {"name": "Applications"}, {"name": "Operations"}],
+  "paths": {
+    "/v1/maintainers": {
+      "get": {
+        "tags": ["Maintainers"],
+        "operationId": "listMaintainers",
+        "summary": "List maintainers in lexical UUID order",
+        "description": "Pages are not a snapshot across requests. The final page omits next_after.",
+        "parameters": [{"$ref": "#/components/parameters/Limit"}, {"$ref": "#/components/parameters/After"}],
+        "responses": {
+          "200": {
+            "description": "A bounded page",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MaintainerPage"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "post": {
+        "tags": ["Maintainers"],
+        "operationId": "createMaintainer",
+        "summary": "Create a maintainer",
+        "description": "Email is normalized to lowercase and is unique under that policy. POST has no idempotency-key guarantee.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {
+            "schema": {"$ref": "#/components/schemas/MaintainerInput"},
+            "example": {"name": "Example Owner", "email": "owner@example.test"}
+          }}
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {"$ref": "#/components/headers/Location"},
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Maintainer"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "413": {"$ref": "#/components/responses/TooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "422": {"$ref": "#/components/responses/InvalidInput"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/v1/maintainers/{id}": {
+      "parameters": [{"$ref": "#/components/parameters/ID"}],
+      "get": {
+        "tags": ["Maintainers"],
+        "operationId": "getMaintainer",
+        "summary": "Read a maintainer and its current validator",
+        "responses": {
+          "200": {
+            "description": "Current maintainer",
+            "headers": {"ETag": {"$ref": "#/components/headers/ETag"}, "X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Maintainer"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "put": {
+        "tags": ["Maintainers"],
+        "operationId": "replaceMaintainer",
+        "summary": "Conditionally replace name and email",
+        "description": "Never creates a missing resource. Every accepted replacement increments revision, including unchanged input. A successful PUT returns no ETag because the request representation is transformed. GET the next validator. Duplicate-email conflicts precede revision conflicts.",
+        "parameters": [{"$ref": "#/components/parameters/IfMatch"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MaintainerInput"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Updated representation, without an ETag",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Maintainer"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"},
+          "413": {"$ref": "#/components/responses/TooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "422": {"$ref": "#/components/responses/InvalidInput"},
+          "428": {"$ref": "#/components/responses/PreconditionRequired"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "delete": {
+        "tags": ["Maintainers"],
+        "operationId": "deleteMaintainer",
+        "summary": "Conditionally delete an unreferenced maintainer",
+        "description": "An application reference prevents deletion with 409, including when the tag is stale. There is no cascade. A valid repeated deletion returns 404.",
+        "parameters": [{"$ref": "#/components/parameters/IfMatch"}],
+        "responses": {
+          "204": {"$ref": "#/components/responses/Deleted"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"},
+          "428": {"$ref": "#/components/responses/PreconditionRequired"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/v1/applications": {
+      "get": {
+        "tags": ["Applications"],
+        "operationId": "listApplications",
+        "summary": "List applications in lexical UUID order",
+        "description": "A nonexistent creator filter yields an empty array. Pages are not a snapshot across requests.",
+        "parameters": [
+          {"$ref": "#/components/parameters/Limit"},
+          {"$ref": "#/components/parameters/After"},
+          {"$ref": "#/components/parameters/CreatorFilter"}
+        ],
+        "responses": {
+          "200": {
+            "description": "A bounded page",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationPage"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "post": {
+        "tags": ["Applications"],
+        "operationId": "createApplication",
+        "summary": "Create an application with an existing immutable creator",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {
+            "schema": {"$ref": "#/components/schemas/ApplicationCreate"},
+            "example": {
+              "title": "Example App",
+              "version": "1.0",
+              "company": "Example",
+              "maintainer_id": "8d1a0e14-bc86-4cd1-b77d-213b2f465d35",
+              "website": "https://example.test",
+              "source": "https://example.test/source",
+              "license": "Example license",
+              "description": "A fictional application."
+            }
+          }}
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Location": {"$ref": "#/components/headers/Location"},
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Application"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "413": {"$ref": "#/components/responses/TooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "422": {"$ref": "#/components/responses/InvalidInput"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/v1/applications/{id}": {
+      "parameters": [{"$ref": "#/components/parameters/ID"}],
+      "get": {
+        "tags": ["Applications"],
+        "operationId": "getApplication",
+        "summary": "Read an application and its current validator",
+        "responses": {
+          "200": {
+            "description": "Current application",
+            "headers": {"ETag": {"$ref": "#/components/headers/ETag"}, "X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Application"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "put": {
+        "tags": ["Applications"],
+        "operationId": "replaceApplication",
+        "summary": "Conditionally replace all mutable application fields",
+        "description": "maintainer_id and server-managed fields are rejected in input. Omitted or null optional fields become empty strings. Business version and server revision are separate. A successful PUT returns no ETag because its representation is transformed. GET the next validator.",
+        "parameters": [{"$ref": "#/components/parameters/IfMatch"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationInput"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Updated representation, without an ETag",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Application"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"},
+          "413": {"$ref": "#/components/responses/TooLarge"},
+          "415": {"$ref": "#/components/responses/UnsupportedMedia"},
+          "422": {"$ref": "#/components/responses/InvalidInput"},
+          "428": {"$ref": "#/components/responses/PreconditionRequired"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "delete": {
+        "tags": ["Applications"],
+        "operationId": "deleteApplication",
+        "summary": "Conditionally delete an application",
+        "parameters": [{"$ref": "#/components/parameters/IfMatch"}],
+        "responses": {
+          "204": {"$ref": "#/components/responses/Deleted"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"},
+          "428": {"$ref": "#/components/responses/PreconditionRequired"},
+          "503": {"$ref": "#/components/responses/Unavailable"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": ["Operations"],
+        "operationId": "health",
+        "summary": "Read process liveness",
+        "responses": {"200": {
+          "description": "Process is serving",
+          "content": {"application/json": {"schema": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {"status": {"const": "ok"}}
+          }}}
+        }}
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": ["Operations"],
+        "operationId": "readiness",
+        "summary": "Check whether the process and selected store can serve requests",
+        "responses": {
+          "200": {"description": "Ready"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "ID": {"name": "id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ID"}},
+      "Limit": {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+      "After": {"name": "after", "in": "query", "description": "Exclusive lexical ID cursor.", "schema": {"$ref": "#/components/schemas/ID"}},
+      "CreatorFilter": {"name": "maintainer_id", "in": "query", "description": "Filter by the recorded immutable creator, not a current responsibility assignment.", "schema": {"$ref": "#/components/schemas/ID"}},
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "One or more quoted entity tags, up to eight tags and 1024 bytes across repeated header lines. At least one strong tag must match this resource. Weak and other-resource tags never match. Missing is 428. Blank, malformed, wildcard, or oversized is 400. Ordinary missing-resource and domain errors precede stale-tag errors.",
+        "schema": {"type": "string", "maxLength": 1024},
+        "example": "\"m1:8d1a0e14-bc86-4cd1-b77d-213b2f465d35:1\""
+      }
+    },
+    "headers": {
+      "RequestID": {"description": "Server-generated request correlation ID.", "schema": {"type": "string"}},
+      "Location": {"description": "Relative path of the created resource.", "schema": {"type": "string"}},
+      "ETag": {
+        "description": "Strong resource-bound representation validator. m1 identifies a Maintainer; a1 identifies an Application.",
+        "schema": {"type": "string"},
+        "example": "\"m1:8d1a0e14-bc86-4cd1-b77d-213b2f465d35:1\""
+      }
+    },
+    "schemas": {
+      "ID": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "description": "Canonical lowercase UUIDv4."
+      },
+      "MaintainerInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "email"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 128, "description": "At most 128 UTF-8 bytes after trimming."},
+          "email": {"type": "string", "format": "email", "maxLength": 254, "description": "Plain ASCII mailbox without a display name, normalized to lowercase. Contact metadata, not an authenticated identity."}
+        }
+      },
+      "ApplicationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "version", "company"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "At most 256 UTF-8 bytes."},
+          "version": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Business version. At most 64 UTF-8 bytes."},
+          "company": {"type": "string", "minLength": 1, "maxLength": 256, "description": "At most 256 UTF-8 bytes."},
+          "website": {"$ref": "#/components/schemas/OptionalURL"},
+          "source": {"$ref": "#/components/schemas/OptionalURL"},
+          "license": {"type": ["string", "null"], "maxLength": 128, "description": "At most 128 UTF-8 bytes. Missing or null becomes empty."},
+          "description": {"type": ["string", "null"], "maxLength": 16384, "description": "At most 16384 UTF-8 bytes. Missing or null becomes empty."}
+        }
+      },
+      "ApplicationCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "version", "company", "maintainer_id"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "At most 256 UTF-8 bytes."},
+          "version": {"type": "string", "minLength": 1, "maxLength": 64, "description": "Business version. At most 64 UTF-8 bytes."},
+          "company": {"type": "string", "minLength": 1, "maxLength": 256, "description": "At most 256 UTF-8 bytes."},
+          "website": {"$ref": "#/components/schemas/OptionalURL"},
+          "source": {"$ref": "#/components/schemas/OptionalURL"},
+          "license": {"type": ["string", "null"], "maxLength": 128, "description": "At most 128 UTF-8 bytes. Missing or null becomes empty."},
+          "description": {"type": ["string", "null"], "maxLength": 16384, "description": "At most 16384 UTF-8 bytes. Missing or null becomes empty."},
+          "maintainer_id": {"$ref": "#/components/schemas/ID", "description": "The recorded creator's ID. Set once at creation; not a current responsibility assignment or authenticated identity."}
+        }
+      },
+      "OptionalURL": {
+        "type": ["string", "null"],
+        "maxLength": 2048,
+        "description": "Empty or an absolute HTTP(S) URL with a host and no userinfo. At most 2048 UTF-8 bytes. Missing or null becomes empty. The server never fetches this URL."
+      },
+      "Maintainer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "email", "revision", "created_at", "updated_at"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/ID"},
+          "name": {"type": "string"},
+          "email": {"type": "string"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 1},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"}
+        },
+        "example": {
+          "id": "8d1a0e14-bc86-4cd1-b77d-213b2f465d35",
+          "name": "Example Owner",
+          "email": "owner@example.test",
+          "revision": 1,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        }
+      },
+      "Application": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "version", "company", "website", "source", "license", "description", "maintainer_id", "revision", "created_at", "updated_at"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/ID"},
+          "title": {"type": "string"},
+          "version": {"type": "string"},
+          "company": {"type": "string"},
+          "website": {"type": "string"},
+          "source": {"type": "string"},
+          "license": {"type": "string"},
+          "description": {"type": "string"},
+          "maintainer_id": {"$ref": "#/components/schemas/ID", "description": "Immutable recorded creator ID. Editing that Maintainer's contact details does not change this Application or its ETag."},
+          "revision": {"type": "integer", "format": "int64", "minimum": 1},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "MaintainerPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "maxItems": 100, "items": {"$ref": "#/components/schemas/Maintainer"}},
+          "next_after": {"$ref": "#/components/schemas/ID"}
+        }
+      },
+      "ApplicationPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "maxItems": 100, "items": {"$ref": "#/components/schemas/Application"}},
+          "next_after": {"$ref": "#/components/schemas/ID"}
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error", "request_id"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+              "code": {"type": "string"},
+              "message": {"type": "string"},
+              "fields": {"type": "object", "additionalProperties": {"type": "string"}}
+            }
+          },
+          "request_id": {"type": "string"}
+        },
+        "example": {
+          "error": {"code": "precondition_failed", "message": "The resource has changed. Read its current representation before retrying."},
+          "request_id": "746d26ae-1898-4ac2-8741-832a8044029c"
+        }
+      }
+    },
+    "responses": {
+      "Deleted": {
+        "description": "Deleted, with no response body",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}
+      },
+      "BadRequest": {
+        "description": "invalid_json, invalid_query, invalid_id, or invalid_precondition",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "NotFound": {
+        "description": "not_found. A syntactically valid operation addresses a missing resource.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "Conflict": {
+        "description": "duplicate_email or maintainer_in_use",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "PreconditionFailed": {
+        "description": "precondition_failed. No supplied resource-specific strong tag matches the current revision.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "TooLarge": {
+        "description": "body_too_large. Request exceeds 65536 bytes.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "UnsupportedMedia": {
+        "description": "unsupported_media_type. POST and PUT require application/json.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "InvalidInput": {
+        "description": "validation_failed or invalid_reference",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "PreconditionRequired": {
+        "description": "precondition_required. PUT and DELETE require If-Match.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "Unavailable": {
+        "description": "unavailable. Storage contention, deadline, or readiness failure. Inspect current state before retrying a write whose outcome is uncertain.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "InternalError": {
+        "description": "internal_error. Details are not exposed to clients.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      }
+    }
+  }
+}

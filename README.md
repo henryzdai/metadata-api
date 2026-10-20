@@ -1,9 +1,25 @@
 # Metadata API
 
-Go JSON handlers and storage adapters for Applications and their recorded creators.
-This revision contains the HTTP package and its tests, not a runnable server command.
+A Go JSON API for Applications and their recorded creators, with SQLite persistence
+and atomic conditional updates.
 
 [API reference](openapi.json)
+
+## Quick start
+
+Build and run the server:
+
+```powershell
+go run .\cmd\metadata-server
+```
+
+It listens on `127.0.0.1:8080` and uses `data\metadata.db`. Stop with Ctrl+C.
+Use `--listen` to change the address, `--db` for the SQLite path, or
+`--storage memory` for volatile local state.
+
+The process exposes `/healthz` and `/readyz`, bounds requests and shutdown, and
+logs request IDs without payloads. It has no authentication or TLS; retain the
+loopback default unless an authenticated TLS boundary protects it.
 
 ## Check the API and storage
 

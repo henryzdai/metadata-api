@@ -58,8 +58,9 @@ off after a load failure.
 
 The file loads once. To rotate, retain the same principal ID and temporarily list
 old and new digests, restart, move clients, then remove the old digest and restart.
-Revocation and role changes also require restart. Never reassign a principal ID
-to a different person or automation. There is no browser login, token issuance
+Revocation and role changes also require restart of every serving process.
+Never reassign a principal ID to a different person or automation.
+There is no browser login, token issuance
 endpoint, identity-provider integration, hot reload, or tenant isolation.
 
 Missing, malformed, repeated, or invalid credentials return `401 unauthenticated`.

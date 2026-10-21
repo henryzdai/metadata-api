@@ -1,9 +1,11 @@
 # Metadata API
 
+[![CI](https://github.com/henryzdai/metadata-api/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/henryzdai/metadata-api/actions/workflows/ci.yml)
+
 Store application metadata and its creators through a Go JSON API.
 Get full CRUD, SQLite persistence, and safe concurrent edits without a database server.
 
-[API reference](openapi.json) | [CI workflow](.github/workflows/ci.yml)
+[API reference](openapi.json) | [Passing E2E run](https://github.com/henryzdai/metadata-api/actions/runs/39508357704) | [Workflow source](.github/workflows/ci.yml)
 
 ## Quick start
 
@@ -67,6 +69,37 @@ Run the conflict-and-restart scenario against the real executable:
 go test .\e2e -run TestConcurrentWritersAcrossRestart -count=1 -v
 ```
 
+## Architecture
+
+### Runtime and storage
+
+```mermaid
+flowchart LR
+	entry["CLI entry point"] --> runtime["Server runtime"]
+	runtime -->|injects selected store| api["HTTP handlers"]
+	client["HTTP client"] -->|HTTP| api
+	api -->|CRUD| store["MetadataStore"]
+	store -.-> sqlite["SQLite adapter"]
+	store -.-> memory["Memory adapter"]
+	sqlite --> database[("Local SQLite file")]
+```
+
+The CLI, runtime, handlers, and selected adapter run in one process.
+Startup injects one `MetadataStore` implementation into the handlers.
+Dotted edges show alternatives, not replication or fallback.
+The selected adapter owns atomic revision and creator checks.
+
+### Creator relationship
+
+```mermaid
+erDiagram
+	Maintainer ||--o{ Application : creator
+```
+
+Each Application has one immutable `maintainer_id`. A Maintainer can be the
+recorded creator of zero or many Applications. Referenced Maintainers cannot be
+deleted, and contact edits do not invalidate Application ETags.
+
 ## Design decisions
 
 These choices prioritize a small, testable metadata service. The reasons explain
@@ -93,6 +126,17 @@ co-maintainers would use a separate responsibility relationship and an explicit
 schema migration, without reinterpreting this field. Those additions are outside
 the MVP.
 
+## Code map
+
+| Path | Responsibility |
+| --- | --- |
+| [`cmd/metadata-server/`](cmd/metadata-server/) | Executable entry point and process signals. |
+| [`internal/server/`](internal/server/) | Configuration, backend selection, listener, and shutdown. |
+| [`internal/metadata/`](internal/metadata/) | Resource models, validation, revisions, and the storage contract. |
+| [`internal/httpapi/`](internal/httpapi/) | Routing, JSON requests and responses, and ETag preconditions. |
+| [`internal/storage/`](internal/storage/) | SQLite and memory adapters plus shared contract tests. |
+| [`e2e/`](e2e/) | Real-process HTTP, concurrency, restart, and shutdown tests. |
+
 ## Verification
 
 Unit and shared storage-contract tests cover validation and backend behavior.
@@ -112,17 +156,23 @@ For logs and coverage:
 This requires PowerShell 7. If Go is not on PATH, pass `-GoExecutable` with its path.
 Results are saved under `artifacts`.
 
-The [successful Linux CI run](https://github.com/henryzdai/metadata-api/actions/runs/39508357704)
+The [successful MVP Linux CI run](https://github.com/henryzdai/metadata-api/actions/runs/39508357704)
 passed unit tests, shared storage contracts, real-process HTTP E2E, the race
 detector, and SIGTERM shutdown. It measured **91.3% statement coverage** across
 `internal` and `cmd`, excluding the separate E2E server process.
+
+Open the [verification job](https://github.com/henryzdai/metadata-api/actions/runs/39508357704/job/118922898078)
+and expand **Real-process HTTP E2E** to see the API test output.
 
 On Windows, the SIGTERM test skips. To run the race detector locally, use
 `.\verify.ps1 -Race` with a supported C compiler.
 
 ## Status and effort
 
-The MVP is published at [henryzdai/metadata-api](https://github.com/henryzdai/metadata-api).
-Implementation, review, documentation, and publication spanned about eight elapsed
-hours, including pauses. The initial prototype took about 1.5 hours of that span.
-These are elapsed spans, not person-hours.
+The verified MVP is preserved at [`mvp-v1`](https://github.com/henryzdai/metadata-api/tree/mvp-v1).
+The [development timeline](docs/EVOLUTION.md) separates that baseline from
+post-MVP improvements and records their decisions, tradeoffs, and evidence.
+
+Initial MVP implementation, review, documentation, and publication spanned about
+eight elapsed hours, including pauses. The initial prototype took about 1.5 hours
+of that span. These are elapsed spans, not person-hours.

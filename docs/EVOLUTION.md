@@ -8,12 +8,16 @@ implementation and verification. The sequence below defines the order of work.
 | Date | Milestone | Decision and tradeoff | Evidence |
 | --- | --- | --- | --- |
 | 2026-10-20 | MVP baseline preserved as `mvp-v1`. | One aggregate storage contract protects CRUD, revisions, and creator integrity. SQLite provides local durability; memory remains volatile. The server is local-first, without authentication or TLS. | [Baseline commit](https://github.com/henryzdai/metadata-api/commit/1bd8b645619d8d84b20957afa5fff187a6e3a25e), [MVP tag](https://github.com/henryzdai/metadata-api/tree/mvp-v1), and [passing Linux CI](https://github.com/henryzdai/metadata-api/actions/runs/39516044844). |
+| 2026-10-20 | Post-MVP 1. Compiled storage plugins. | One immutable catalog now owns names, defaults, option aliases, prepared openers, and durability metadata. A separately registered test provider serves real HTTP without router changes. New providers require a rebuild and the complete shared contract; this is not a dynamic loader or external SDK. | [Implementation](https://github.com/henryzdai/metadata-api/commit/fa2a6b6a4012c2aeb658ed319d6ea6268fa60d99), [passing Linux CI](https://github.com/henryzdai/metadata-api/actions/runs/39527182495), and [storage guide](STORAGE.md). |
 
 The MVP already includes strict input validation, business version and server
 revision separation, atomic ETag/If-Match writes, request and page bounds,
 request timeouts, graceful shutdown, readiness, and safe request logs.
 Its recorded Linux statement coverage is 91.3 percent across `internal` and `cmd`,
 excluding the separately launched E2E server process.
+
+Post-MVP coverage follows the executable's module dependency graph. Shared test
+runners and test-only providers do not inflate that application coverage.
 
 ## Post-MVP sequence
 

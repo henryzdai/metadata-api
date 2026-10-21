@@ -66,6 +66,7 @@ func TestRegistryCopiesMetadataOptionsAndPreparedValues(t *testing.T) {
 		Name: provider.Name, Summary: provider.Summary, Durable: provider.Durable,
 		Options: append([]storage.OptionSpec(nil), provider.Options...),
 	}
+
 	providers := []storage.Provider{provider}
 	registry, err := storage.NewRegistry(provider.Name, providers...)
 	if err != nil {
@@ -83,12 +84,12 @@ func TestRegistryCopiesMetadataOptionsAndPreparedValues(t *testing.T) {
 		t.Fatal("default name changed")
 	}
 	supplied := storage.Values{"probe-number": "23"}
-	explicit, err := registry.Prepare(original.Name, supplied)
+	explicit, err := registry.Prepare(original.Name, supplied, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	supplied["probe-number"] = "93"
-	defaulted, err := registry.Prepare(original.Name, nil)
+	defaulted, err := registry.Prepare(original.Name, nil, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +114,11 @@ func TestRegistryDoesNotShareValuesWithPreparation(t *testing.T) {
 	var received []string
 	provider := storage.Provider{
 		Name: "mutating", Options: []storage.OptionSpec{{Key: "label", Default: "original"}},
-		Prepare: func(values storage.Values) (storage.OpenFunc, error) {
+		Prepare: func(values storage.Values, policy metadata.StorePolicy) (storage.OpenFunc, error) {
 			received = append(received, values["label"])
 			values["label"] = "mutated"
 			delete(values, "label")
-			return memory.Provider().Prepare(nil)
+			return memory.Provider().Prepare(nil, policy)
 		},
 	}
 	registry, err := storage.NewRegistry(provider.Name, provider)
@@ -126,7 +127,7 @@ func TestRegistryDoesNotShareValuesWithPreparation(t *testing.T) {
 	}
 	supplied := storage.Values{"label": "supplied"}
 	for _, values := range []storage.Values{supplied, nil, nil} {
-		if _, err := registry.Prepare(provider.Name, values); err != nil {
+		if _, err := registry.Prepare(provider.Name, values, metadata.DefaultStorePolicy()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,7 +142,7 @@ func TestRegistryRejectsInvalidPreparationWithoutExposingValues(t *testing.T) {
 	called := 0
 	provider := storage.Provider{
 		Name: "rejecting", Options: []storage.OptionSpec{{Key: "secret"}},
-		Prepare: func(storage.Values) (storage.OpenFunc, error) {
+		Prepare: func(storage.Values, metadata.StorePolicy) (storage.OpenFunc, error) {
 			called++
 			return nil, cause
 		},
@@ -157,30 +158,33 @@ func TestRegistryRejectsInvalidPreparationWithoutExposingValues(t *testing.T) {
 		{secret, nil},
 		{provider.Name, storage.Values{secret: secret}},
 	} {
-		if _, err := registry.Prepare(test.name, test.values); err == nil || strings.Contains(err.Error(), secret) {
+		if _, err := registry.Prepare(test.name, test.values, metadata.DefaultStorePolicy()); err == nil || strings.Contains(err.Error(), secret) {
 			t.Fatalf("selection or option error = %v", err)
 		}
 	}
 	if called != 0 {
 		t.Fatal("invalid selection or unknown options reached preparation")
 	}
-	if _, err := registry.Prepare(provider.Name, storage.Values{"secret": secret}); !errors.Is(err, cause) ||
+	if _, err := registry.Prepare(provider.Name, storage.Values{"secret": secret}, metadata.DefaultStorePolicy()); !errors.Is(err, cause) ||
 		strings.Contains(err.Error(), secret) {
 		t.Fatalf("preparation failure lost its cause or exposed values: %v", err)
 	}
-	provider.Prepare = func(storage.Values) (storage.OpenFunc, error) { return nil, nil }
+	provider.Prepare = func(storage.Values, metadata.StorePolicy) (storage.OpenFunc, error) { return nil, nil }
 	registry, err = storage.NewRegistry(provider.Name, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.Prepare(provider.Name, nil); err == nil {
+	if _, err := registry.Prepare(provider.Name, nil, metadata.DefaultStorePolicy()); err == nil {
 		t.Fatal("accepted a nil prepared opener")
 	}
 }
 
 func TestPreparedStoreRejectsInvalidOpenResults(t *testing.T) {
 	cause := errors.New("private-open-value")
-	partial := memory.New()
+	partial, err := memory.New(metadata.DefaultStorePolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var typedNil *memory.Store
 	for _, test := range []struct {
 		name string
@@ -195,13 +199,13 @@ func TestPreparedStoreRejectsInvalidOpenResults(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			provider := storage.Provider{
 				Name:    "invalid",
-				Prepare: func(storage.Values) (storage.OpenFunc, error) { return test.open, nil },
+				Prepare: func(storage.Values, metadata.StorePolicy) (storage.OpenFunc, error) { return test.open, nil },
 			}
 			registry, err := storage.NewRegistry(provider.Name, provider)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := registry.Prepare(provider.Name, nil)
+			plan, err := registry.Prepare(provider.Name, nil, metadata.DefaultStorePolicy())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -222,7 +226,7 @@ func TestPreparedStoreRejectsInvalidOpenResults(t *testing.T) {
 	if absent.DefaultName() != "" || len(absent.Descriptions()) != 0 {
 		t.Fatal("nil registry exposes a default catalog")
 	}
-	if _, err := absent.Prepare("memory", nil); err == nil {
+	if _, err := absent.Prepare("memory", nil, metadata.DefaultStorePolicy()); err == nil {
 		t.Fatal("nil registry prepared a store")
 	}
 }

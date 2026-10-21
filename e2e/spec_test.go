@@ -9,14 +9,7 @@ import (
 )
 
 func TestOpenAPIContract(t *testing.T) {
-	data, err := os.ReadFile("../openapi.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
-		t.Fatal(err)
-	}
+	document := openAPIDocument(t)
 	if document["openapi"] != "3.1.0" {
 		t.Fatalf("unexpected OpenAPI version: %v", document["openapi"])
 	}
@@ -69,6 +62,53 @@ func TestOpenAPIContract(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestOpenAPIResourceBounds(t *testing.T) {
+	document := openAPIDocument(t)
+	for _, name := range []string{"MaintainerPage", "ApplicationPage"} {
+		page := openAPIObject(t, document, "components", "schemas", name)
+		budget, ok := page["x-max-response-bytes"].(float64)
+		if !ok || budget != float64(1<<20) {
+			t.Errorf("%s does not document the exact encoded-page budget", name)
+		}
+	}
+	unavailable := openAPIObject(t, document, "components", "responses", "Unavailable")
+	description, ok := unavailable["description"].(string)
+	if !ok || !strings.Contains(description, "overloaded") || !strings.Contains(description, "resource_capacity_exceeded") {
+		t.Error("OpenAPI omits overload or resource-capacity outcomes")
+	}
+	retry := openAPIObject(t, unavailable, "headers", "Retry-After")
+	if retry["$ref"] != "#/components/headers/RetryAfter" {
+		t.Error("OpenAPI omits retry guidance for overload")
+	}
+	openAPIObject(t, document, "paths", "/healthz", "get", "responses", "503")
+}
+
+func openAPIDocument(t *testing.T) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile("../openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func openAPIObject(t *testing.T, document map[string]any, keys ...string) map[string]any {
+	t.Helper()
+	current := document
+	for _, key := range keys {
+		object, ok := current[key].(map[string]any)
+		if !ok {
+			t.Fatalf("missing OpenAPI object %s", strings.Join(keys, "/"))
+		}
+		current = object
+	}
+	return current
 }
 
 func walkReferences(t *testing.T, document map[string]any, value any, at string) {

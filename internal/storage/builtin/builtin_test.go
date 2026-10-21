@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage"
 	"metadata-api/internal/storage/builtin"
 	"metadata-api/internal/testsupport/probe"
@@ -41,7 +42,7 @@ func TestStockCatalogAndExplicitExtensions(t *testing.T) {
 	if !reflect.DeepEqual(durability, map[string]bool{"sqlite": true, "memory": false, "probe": false}) {
 		t.Fatalf("catalog durability = %v", durability)
 	}
-	plan, err := catalog.Prepare("probe", storage.Values{"probe-number": "19"})
+	plan, err := catalog.Prepare("probe", storage.Values{"probe-number": "19"}, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

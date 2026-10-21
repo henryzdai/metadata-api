@@ -25,15 +25,16 @@ func fromError(err error) *problem {
 		}
 	}
 	status := map[metadata.ErrorCode]int{
-		metadata.InvalidID:          http.StatusBadRequest,
-		metadata.ValidationFailed:   http.StatusUnprocessableEntity,
-		metadata.NotFound:           http.StatusNotFound,
-		metadata.DuplicateEmail:     http.StatusConflict,
-		metadata.InvalidReference:   http.StatusUnprocessableEntity,
-		metadata.MaintainerInUse:    http.StatusConflict,
-		metadata.PreconditionFailed: http.StatusPreconditionFailed,
-		metadata.Unavailable:        http.StatusServiceUnavailable,
-		metadata.InternalError:      http.StatusInternalServerError,
+		metadata.InvalidID:                http.StatusBadRequest,
+		metadata.ValidationFailed:         http.StatusUnprocessableEntity,
+		metadata.NotFound:                 http.StatusNotFound,
+		metadata.DuplicateEmail:           http.StatusConflict,
+		metadata.InvalidReference:         http.StatusUnprocessableEntity,
+		metadata.MaintainerInUse:          http.StatusConflict,
+		metadata.PreconditionFailed:       http.StatusPreconditionFailed,
+		metadata.ResourceCapacityExceeded: http.StatusServiceUnavailable,
+		metadata.Unavailable:              http.StatusServiceUnavailable,
+		metadata.InternalError:            http.StatusInternalServerError,
 	}[domain.Code]
 	if status == 0 {
 		return &problem{

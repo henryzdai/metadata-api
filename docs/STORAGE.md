@@ -25,7 +25,8 @@ SQLite still treats its path as a filesystem path, not a DSN.
    in a package within this source module.
 2. Return a [Provider descriptor](../internal/storage/registry.go) with its name,
    durability, option descriptions, and preparation function. Preparation validates
-   options and returns an opener that captures typed configuration.
+   options and the validated `StorePolicy`, then returns an opener that captures
+   both. The adapter must receive that complete policy, not substitute defaults.
 3. Register it at the executable's composition root through
    `builtin.NewRegistry(custom.Provider())`. The registry supplies accepted
    names, configuration, and startup metadata from that one catalog.
@@ -40,7 +41,8 @@ and its [real-HTTP test](../internal/server/provider_test.go) prove that another
 compiled package can be selected without changing the router.
 
 Providers must preserve atomic revision checks, unique contacts, immutable creator
-references, and the documented error precedence. They must not return success
+references, resource quotas, page budgets, and the documented error precedence.
+They must not return success
 before committing, ignore cancellation, or substitute another backend after an
 open failure. The durability descriptor is a promise to test, not a guess from
 the provider's name.

@@ -158,8 +158,8 @@ func TestSelectedProviderOpenFailuresNeverFallBack(t *testing.T) {
 			provider := recorder.Provider()
 			prepare := provider.Prepare
 			attempts, fallbackOpens := 0, 0
-			provider.Prepare = func(values storage.Values) (storage.OpenFunc, error) {
-				open, err := prepare(values)
+			provider.Prepare = func(values storage.Values, policy metadata.StorePolicy) (storage.OpenFunc, error) {
+				open, err := prepare(values, policy)
 				if err != nil {
 					return nil, err
 				}
@@ -170,10 +170,10 @@ func TestSelectedProviderOpenFailuresNeverFallBack(t *testing.T) {
 			}
 			fallback := storage.Provider{
 				Name: "fallback",
-				Prepare: func(storage.Values) (storage.OpenFunc, error) {
+				Prepare: func(_ storage.Values, policy metadata.StorePolicy) (storage.OpenFunc, error) {
 					return func(context.Context) (metadata.MetadataStore, error) {
 						fallbackOpens++
-						return memory.New(), nil
+						return memory.New(policy)
 					}, nil
 				},
 			}

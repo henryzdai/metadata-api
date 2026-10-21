@@ -5,15 +5,16 @@ import (
 	"errors"
 	"testing"
 
+	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage"
 )
 
 func TestProviderOpensIndependentStoresAndHonorsCancellation(t *testing.T) {
 	provider := Provider()
-	if _, err := provider.Prepare(storage.Values{"path": "private-value"}); err == nil {
+	if _, err := provider.Prepare(storage.Values{"path": "private-value"}, metadata.DefaultStorePolicy()); err == nil {
 		t.Fatal("memory provider accepted an option")
 	}
-	open, err := provider.Prepare(nil)
+	open, err := provider.Prepare(nil, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

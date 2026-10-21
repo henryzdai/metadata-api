@@ -25,7 +25,7 @@ type Provider struct {
 	Summary string
 	Durable bool
 	Options []OptionSpec
-	Prepare func(Values) (OpenFunc, error)
+	Prepare func(Values, metadata.StorePolicy) (OpenFunc, error)
 }
 
 type Description struct {
@@ -102,9 +102,12 @@ func (r *Registry) Descriptions() []Description {
 	return descriptions
 }
 
-func (r *Registry) Prepare(name string, supplied Values) (PreparedStore, error) {
+func (r *Registry) Prepare(name string, supplied Values, policy metadata.StorePolicy) (PreparedStore, error) {
 	if r == nil {
 		return PreparedStore{}, errors.New("storage catalog is unavailable")
+	}
+	if err := policy.Validate(); err != nil {
+		return PreparedStore{}, err
 	}
 	provider, exists := r.providers[name]
 	if !exists {
@@ -120,7 +123,7 @@ func (r *Registry) Prepare(name string, supplied Values) (PreparedStore, error) 
 		}
 		values[key] = value
 	}
-	open, err := provider.Prepare(values)
+	open, err := provider.Prepare(values, policy)
 	if err != nil {
 		return PreparedStore{}, &providerFailure{name: name, operation: "preparation", err: err}
 	}

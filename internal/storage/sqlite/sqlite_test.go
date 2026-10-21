@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,17 @@ import (
 
 func TestMetadataStoreContract(t *testing.T) {
 	storagetest.Contract(t, func(t *testing.T) metadata.MetadataStore {
-		store, err := Open(context.Background(), filepath.Join(testsupport.Workspace(t), "records.db"))
+		store, err := Open(context.Background(), filepath.Join(testsupport.Workspace(t), "records.db"), metadata.DefaultStorePolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	})
+}
+
+func TestResourceBoundsContract(t *testing.T) {
+	storagetest.BoundsContract(t, func(t *testing.T, policy metadata.StorePolicy) metadata.MetadataStore {
+		store, err := Open(context.Background(), filepath.Join(testsupport.Workspace(t), "records.db"), policy)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -28,7 +39,7 @@ func TestMetadataStoreContract(t *testing.T) {
 func TestDurableReopenAndEscapedFilesystemPath(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(testsupport.Workspace(t), "directory with spaces", "metadata # & %.db")
-	first, err := Open(ctx, path)
+	first, err := Open(ctx, path, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +57,7 @@ func TestDurableReopenAndEscapedFilesystemPath(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	second, err := Open(ctx, path)
+	second, err := Open(ctx, path, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +70,10 @@ func TestDurableReopenAndEscapedFilesystemPath(t *testing.T) {
 	if err != nil || gotApp != app {
 		t.Fatalf("reopened application = %#v, %v", gotApp, err)
 	}
-	for pragma, want := range map[string]int{"foreign_keys": 1, "synchronous": 2, "busy_timeout": 1000, "user_version": 1} {
+	for pragma, want := range map[string]int{
+		"foreign_keys": 1, "synchronous": 2, "busy_timeout": 1000,
+		"user_version": schemaVersion, "cache_size": -8192, "temp_store": 1,
+	} {
 		var got int
 		if err := second.db.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(&got); err != nil || got != want {
 			t.Fatalf("%s = %d, %v; want %d", pragma, got, err, want)
@@ -88,7 +102,7 @@ func TestUnsupportedFutureSchemaAndTransactionalMigration(t *testing.T) {
 		name string
 		seed string
 	}{
-		{"future", "PRAGMA user_version = 2"},
+		{"future", fmt.Sprintf("PRAGMA user_version = %d", schemaVersion+1)},
 		{"conflicting table", "CREATE TABLE applications (id TEXT)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -103,7 +117,7 @@ func TestUnsupportedFutureSchemaAndTransactionalMigration(t *testing.T) {
 			if err := raw.Close(); err != nil {
 				t.Fatal(err)
 			}
-			store, err := Open(context.Background(), path)
+			store, err := Open(context.Background(), path, metadata.DefaultStorePolicy())
 			if err == nil {
 				_ = store.Close()
 				t.Fatal("unsupported database initialized")
@@ -122,14 +136,14 @@ func TestUnsupportedFutureSchemaAndTransactionalMigration(t *testing.T) {
 			}
 			wantVersion := 0
 			if test.name == "future" {
-				wantVersion = 2
+				wantVersion = schemaVersion + 1
 			}
 			if version != wantVersion || maintainers != 0 {
 				t.Fatalf("failed migration changed schema; version %d, maintainer tables %d", version, maintainers)
 			}
 		})
 	}
-	if _, err := Open(context.Background(), ""); err == nil {
+	if _, err := Open(context.Background(), "", metadata.DefaultStorePolicy()); err == nil {
 		t.Fatal("accepted empty filesystem path")
 	}
 }
@@ -137,7 +151,7 @@ func TestUnsupportedFutureSchemaAndTransactionalMigration(t *testing.T) {
 func TestRevisionExhaustionAndBusyAreNonMutating(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(testsupport.Workspace(t), "records.db")
-	store, err := Open(ctx, path)
+	store, err := Open(ctx, path, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,12 +194,12 @@ func TestRevisionExhaustionAndBusyAreNonMutating(t *testing.T) {
 func TestTwoStoreInstancesHaveOneConditionalWinner(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(testsupport.Workspace(t), "records.db")
-	first, err := Open(ctx, path)
+	first, err := Open(ctx, path, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = first.Close() }()
-	second, err := Open(ctx, path)
+	second, err := Open(ctx, path, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

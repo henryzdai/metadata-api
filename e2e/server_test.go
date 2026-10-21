@@ -1,10 +1,12 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -111,6 +113,59 @@ type apiError struct {
 		Fields  map[string]string `json:"fields"`
 	} `json:"error"`
 	RequestID string `json:"request_id"`
+}
+
+type heldPost struct {
+	connection net.Conn
+	reader     *bufio.Reader
+	body       string
+}
+
+func holdPost(t *testing.T, s *server, body string) *heldPost {
+	t.Helper()
+	address := strings.TrimPrefix(s.baseURL, "http://")
+	connection, err := net.DialTimeout("tcp", address, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if err := connection.SetDeadline(time.Now().Add(6 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	headers := fmt.Sprintf(
+		"POST /v1/maintainers HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+		address, len(body),
+	)
+	if _, err := io.WriteString(connection, headers); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(connection)
+	interim, err := http.ReadResponse(reader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interim.Body.Close()
+	if interim.StatusCode != http.StatusContinue {
+		t.Fatalf("handler did not begin reading the request: %d", interim.StatusCode)
+	}
+	return &heldPost{connection: connection, reader: reader, body: body}
+}
+
+func (request *heldPost) finish(t *testing.T) response {
+	t.Helper()
+	if _, err := io.WriteString(request.connection, request.body); err != nil {
+		t.Fatalf("accepted request was closed before its body completed: %v", err)
+	}
+	result, err := http.ReadResponse(request.reader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Body.Close()
+	body, err := io.ReadAll(result.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response{status: result.StatusCode, header: result.Header, body: body}.want(t, http.StatusCreated)
 }
 
 func backendRegistry(t *testing.T) *storage.Registry {

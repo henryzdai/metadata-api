@@ -26,6 +26,10 @@ func (s *Store) CreateApplication(ctx context.Context, input metadata.CreateAppl
 		if count == 0 {
 			return metadata.NewError(metadata.InvalidReference, nil)
 		}
+		if err := s.adjustUsage(ctx, tx, 0, 1, 0,
+			metadata.ApplicationFieldBytes(input.ApplicationFields, input.MaintainerID)); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx,
 			"INSERT INTO applications ("+applicationColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			record.ID, record.Title, record.Version, record.Company, record.Website, record.Source,
@@ -61,19 +65,25 @@ func (s *Store) ListApplications(ctx context.Context, options metadata.Applicati
 		return page, translate(err)
 	}
 	defer func() { _ = rows.Close() }()
+	used := metadata.PageEnvelopeBytes
 	for rows.Next() {
 		record, err := scanApplication(rows)
 		if err != nil {
 			return page, translate(err)
 		}
+		size := metadata.ApplicationEncodedBound(record)
+		if len(page.Items) == limit || !metadata.PageItemFits(used, size) {
+			if len(page.Items) == 0 {
+				return page, metadata.NewError(metadata.InternalError, nil)
+			}
+			page.NextAfter = string(page.Items[len(page.Items)-1].ID)
+			break
+		}
 		page.Items = append(page.Items, record)
+		used += size
 	}
 	if err := rows.Err(); err != nil {
 		return page, translate(err)
-	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextAfter = string(page.Items[limit-1].ID)
 	}
 	return page, nil
 }
@@ -98,6 +108,11 @@ func (s *Store) UpdateApplication(ctx context.Context, id metadata.ApplicationID
 		if err != nil {
 			return err
 		}
+		if err := s.adjustUsage(ctx, tx, 0, 0,
+			metadata.ApplicationFieldBytes(record.ApplicationFields, record.MaintainerID),
+			metadata.ApplicationFieldBytes(fields, record.MaintainerID)); err != nil {
+			return err
+		}
 		now := time.Now().UTC()
 		result, err := tx.ExecContext(ctx,
 			`UPDATE applications SET title = ?, version = ?, company = ?, website = ?, source = ?,
@@ -120,14 +135,19 @@ func (s *Store) UpdateApplication(ctx context.Context, id metadata.ApplicationID
 
 func (s *Store) DeleteApplication(ctx context.Context, id metadata.ApplicationID, expected []metadata.Revision) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
-		var revision metadata.Revision
-		if err := tx.QueryRowContext(ctx, "SELECT revision FROM applications WHERE id = ?", id).Scan(&revision); err != nil {
+		record, err := scanApplication(tx.QueryRowContext(ctx,
+			"SELECT "+applicationColumns+" FROM applications WHERE id = ?", id))
+		if err != nil {
 			return err
 		}
-		if !metadata.Matches(revision, expected) {
+		if !metadata.Matches(record.Revision, expected) {
 			return metadata.NewError(metadata.PreconditionFailed, nil)
 		}
-		result, err := tx.ExecContext(ctx, "DELETE FROM applications WHERE id = ? AND revision = ?", id, revision)
+		if err := s.adjustUsage(ctx, tx, 0, -1,
+			metadata.ApplicationFieldBytes(record.ApplicationFields, record.MaintainerID), 0); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, "DELETE FROM applications WHERE id = ? AND revision = ?", id, record.Revision)
 		return changedOne(result, err)
 	})
 }

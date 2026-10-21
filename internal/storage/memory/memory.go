@@ -2,7 +2,7 @@ package memory
 
 import (
 	"context"
-	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,20 +13,31 @@ import (
 // checks and mutations cannot interleave.
 type Store struct {
 	mu           sync.RWMutex
-	maintainers  map[metadata.MaintainerID]metadata.Maintainer
+	maintainers  map[metadata.MaintainerID]maintainerEntry
 	applications map[metadata.ApplicationID]metadata.Application
 	emails       map[string]metadata.MaintainerID
+	policy       metadata.StorePolicy
+	fieldBytes   int64
 	closed       bool
+}
+
+type maintainerEntry struct {
+	metadata.Maintainer
+	applicationRefs int
 }
 
 var _ metadata.MetadataStore = (*Store)(nil)
 
-func New() *Store {
+func New(policy metadata.StorePolicy) (*Store, error) {
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
 	return &Store{
-		maintainers:  make(map[metadata.MaintainerID]metadata.Maintainer),
+		maintainers:  make(map[metadata.MaintainerID]maintainerEntry),
 		applications: make(map[metadata.ApplicationID]metadata.Application),
 		emails:       make(map[string]metadata.MaintainerID),
-	}
+		policy:       policy,
+	}, nil
 }
 
 func (s *Store) available(ctx context.Context) error {
@@ -52,13 +63,22 @@ func (s *Store) CreateMaintainer(ctx context.Context, input metadata.MaintainerF
 	if _, exists := s.emails[fields.Email]; exists {
 		return metadata.Maintainer{}, metadata.NewError(metadata.DuplicateEmail, nil)
 	}
+	if len(s.maintainers) >= s.policy.Limits().MaxMaintainers {
+		return metadata.Maintainer{}, metadata.NewError(metadata.ResourceCapacityExceeded, nil)
+	}
+	nextBytes, err := s.policy.FieldBytesAfter(s.fieldBytes, 0, metadata.MaintainerFieldBytes(fields))
+	if err != nil {
+		return metadata.Maintainer{}, err
+	}
+	fields = ownMaintainer(fields)
 	now := time.Now().UTC()
 	record := metadata.Maintainer{
 		ID: metadata.MaintainerID(metadata.NewUUID()), MaintainerFields: fields,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
-	s.maintainers[record.ID] = record
+	s.maintainers[record.ID] = maintainerEntry{Maintainer: record}
 	s.emails[fields.Email] = record.ID
+	s.fieldBytes = nextBytes
 	return record, nil
 }
 
@@ -72,7 +92,7 @@ func (s *Store) GetMaintainer(ctx context.Context, id metadata.MaintainerID) (me
 	if !exists {
 		return metadata.Maintainer{}, metadata.NewError(metadata.NotFound, nil)
 	}
-	return record, nil
+	return record.Maintainer, nil
 }
 
 func (s *Store) ListMaintainers(ctx context.Context, options metadata.MaintainerList) (metadata.Page[metadata.Maintainer], error) {
@@ -82,16 +102,28 @@ func (s *Store) ListMaintainers(ctx context.Context, options metadata.Maintainer
 	if err := s.available(ctx); err != nil {
 		return page, err
 	}
-	for id, record := range s.maintainers {
+	limit := metadata.PageLimit(options.Limit)
+	candidates := newCandidates(limit+1, func(record metadata.Maintainer) string { return string(record.ID) })
+	for id, entry := range s.maintainers {
+		if err := ctx.Err(); err != nil {
+			return page, metadata.WrapError(metadata.Unavailable, err)
+		}
 		if id > options.After {
-			page.Items = append(page.Items, record)
+			candidates.add(entry.Maintainer)
 		}
 	}
-	sort.Slice(page.Items, func(i, j int) bool { return page.Items[i].ID < page.Items[j].ID })
-	limit := metadata.PageLimit(options.Limit)
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextAfter = string(page.Items[limit-1].ID)
+	used := metadata.PageEnvelopeBytes
+	for _, record := range candidates.sorted() {
+		size := metadata.MaintainerEncodedBound(record)
+		if len(page.Items) == limit || !metadata.PageItemFits(used, size) {
+			if len(page.Items) == 0 {
+				return page, metadata.NewError(metadata.InternalError, nil)
+			}
+			page.NextAfter = string(page.Items[len(page.Items)-1].ID)
+			break
+		}
+		page.Items = append(page.Items, record)
+		used += size
 	}
 	return page, nil
 }
@@ -120,13 +152,20 @@ func (s *Store) UpdateMaintainer(ctx context.Context, id metadata.MaintainerID, 
 	if err != nil {
 		return metadata.Maintainer{}, err
 	}
+	nextBytes, err := s.policy.FieldBytesAfter(s.fieldBytes,
+		metadata.MaintainerFieldBytes(record.MaintainerFields), metadata.MaintainerFieldBytes(fields))
+	if err != nil {
+		return metadata.Maintainer{}, err
+	}
+	fields = ownMaintainer(fields)
 	delete(s.emails, record.Email)
 	record.MaintainerFields = fields
 	record.Revision = next
 	record.UpdatedAt = time.Now().UTC()
 	s.maintainers[id] = record
 	s.emails[fields.Email] = id
-	return record, nil
+	s.fieldBytes = nextBytes
+	return record.Maintainer, nil
 }
 
 func (s *Store) DeleteMaintainer(ctx context.Context, id metadata.MaintainerID, expected []metadata.Revision) error {
@@ -139,16 +178,19 @@ func (s *Store) DeleteMaintainer(ctx context.Context, id metadata.MaintainerID, 
 	if !exists {
 		return metadata.NewError(metadata.NotFound, nil)
 	}
-	for _, application := range s.applications {
-		if application.MaintainerID == id {
-			return metadata.NewError(metadata.MaintainerInUse, nil)
-		}
+	if record.applicationRefs != 0 {
+		return metadata.NewError(metadata.MaintainerInUse, nil)
 	}
 	if !metadata.Matches(record.Revision, expected) {
 		return metadata.NewError(metadata.PreconditionFailed, nil)
 	}
+	nextBytes, err := s.policy.FieldBytesAfter(s.fieldBytes, metadata.MaintainerFieldBytes(record.MaintainerFields), 0)
+	if err != nil {
+		return err
+	}
 	delete(s.maintainers, id)
 	delete(s.emails, record.Email)
+	s.fieldBytes = nextBytes
 	return nil
 }
 
@@ -162,15 +204,29 @@ func (s *Store) CreateApplication(ctx context.Context, input metadata.CreateAppl
 	if err := s.available(ctx); err != nil {
 		return metadata.Application{}, err
 	}
-	if _, exists := s.maintainers[input.MaintainerID]; !exists {
+	owner, exists := s.maintainers[input.MaintainerID]
+	if !exists {
 		return metadata.Application{}, metadata.NewError(metadata.InvalidReference, nil)
 	}
+	if len(s.applications) >= s.policy.Limits().MaxApplications {
+		return metadata.Application{}, metadata.NewError(metadata.ResourceCapacityExceeded, nil)
+	}
+	nextBytes, err := s.policy.FieldBytesAfter(s.fieldBytes, 0,
+		metadata.ApplicationFieldBytes(input.ApplicationFields, input.MaintainerID))
+	if err != nil {
+		return metadata.Application{}, err
+	}
+	input.ApplicationFields = ownApplication(input.ApplicationFields)
+	input.MaintainerID = metadata.MaintainerID(strings.Clone(string(input.MaintainerID)))
 	now := time.Now().UTC()
 	record := metadata.Application{
 		ID: metadata.ApplicationID(metadata.NewUUID()), ApplicationFields: input.ApplicationFields,
 		MaintainerID: input.MaintainerID, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	s.applications[record.ID] = record
+	owner.applicationRefs++
+	s.maintainers[record.MaintainerID] = owner
+	s.fieldBytes = nextBytes
 	return record, nil
 }
 
@@ -194,16 +250,28 @@ func (s *Store) ListApplications(ctx context.Context, options metadata.Applicati
 	if err := s.available(ctx); err != nil {
 		return page, err
 	}
+	limit := metadata.PageLimit(options.Limit)
+	candidates := newCandidates(limit+1, func(record metadata.Application) string { return string(record.ID) })
 	for id, record := range s.applications {
+		if err := ctx.Err(); err != nil {
+			return page, metadata.WrapError(metadata.Unavailable, err)
+		}
 		if id > options.After && (options.MaintainerID == "" || options.MaintainerID == record.MaintainerID) {
-			page.Items = append(page.Items, record)
+			candidates.add(record)
 		}
 	}
-	sort.Slice(page.Items, func(i, j int) bool { return page.Items[i].ID < page.Items[j].ID })
-	limit := metadata.PageLimit(options.Limit)
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextAfter = string(page.Items[limit-1].ID)
+	used := metadata.PageEnvelopeBytes
+	for _, record := range candidates.sorted() {
+		size := metadata.ApplicationEncodedBound(record)
+		if len(page.Items) == limit || !metadata.PageItemFits(used, size) {
+			if len(page.Items) == 0 {
+				return page, metadata.NewError(metadata.InternalError, nil)
+			}
+			page.NextAfter = string(page.Items[len(page.Items)-1].ID)
+			break
+		}
+		page.Items = append(page.Items, record)
+		used += size
 	}
 	return page, nil
 }
@@ -229,10 +297,17 @@ func (s *Store) UpdateApplication(ctx context.Context, id metadata.ApplicationID
 	if err != nil {
 		return metadata.Application{}, err
 	}
-	record.ApplicationFields = fields
+	nextBytes, err := s.policy.FieldBytesAfter(s.fieldBytes,
+		metadata.ApplicationFieldBytes(record.ApplicationFields, record.MaintainerID),
+		metadata.ApplicationFieldBytes(fields, record.MaintainerID))
+	if err != nil {
+		return metadata.Application{}, err
+	}
+	record.ApplicationFields = ownApplication(fields)
 	record.Revision = next
 	record.UpdatedAt = time.Now().UTC()
 	s.applications[id] = record
+	s.fieldBytes = nextBytes
 	return record, nil
 }
 
@@ -249,7 +324,16 @@ func (s *Store) DeleteApplication(ctx context.Context, id metadata.ApplicationID
 	if !metadata.Matches(record.Revision, expected) {
 		return metadata.NewError(metadata.PreconditionFailed, nil)
 	}
+	nextBytes, err := s.policy.FieldBytesAfter(s.fieldBytes,
+		metadata.ApplicationFieldBytes(record.ApplicationFields, record.MaintainerID), 0)
+	if err != nil {
+		return err
+	}
 	delete(s.applications, id)
+	owner := s.maintainers[record.MaintainerID]
+	owner.applicationRefs--
+	s.maintainers[record.MaintainerID] = owner
+	s.fieldBytes = nextBytes
 	return nil
 }
 
@@ -264,4 +348,17 @@ func (s *Store) Close() error {
 	defer s.mu.Unlock()
 	s.closed = true
 	return nil
+}
+
+func ownMaintainer(fields metadata.MaintainerFields) metadata.MaintainerFields {
+	return metadata.MaintainerFields{Name: strings.Clone(fields.Name), Email: strings.Clone(fields.Email)}
+}
+
+func ownApplication(fields metadata.ApplicationFields) metadata.ApplicationFields {
+	return metadata.ApplicationFields{
+		Title: strings.Clone(fields.Title), Version: strings.Clone(fields.Version),
+		Company: strings.Clone(fields.Company), Website: strings.Clone(fields.Website),
+		Source: strings.Clone(fields.Source), License: strings.Clone(fields.License),
+		Description: strings.Clone(fields.Description),
+	}
 }

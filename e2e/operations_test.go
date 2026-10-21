@@ -1,12 +1,8 @@
 package e2e
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
-	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -102,6 +98,16 @@ func TestStartupErrorsNeverFallback(t *testing.T) {
 		{"memory rejects db alias", []string{"--storage", "memory", "--db", "unused.db"}},
 		{"zero request timeout", []string{"--storage", "memory", "--request-timeout", "0s"}},
 		{"negative shutdown timeout", []string{"--storage", "memory", "--shutdown-timeout", "-1s"}},
+		{"zero connection limit", []string{"--max-connections=0"}},
+		{"excess connection limit", []string{"--max-connections=2049"}},
+		{"zero request admission", []string{"--max-inflight=0"}},
+		{"excess request admission", []string{"--max-inflight=257"}},
+		{"zero maintainer limit", []string{"--max-maintainers=0"}},
+		{"excess maintainer limit", []string{"--max-maintainers=1000001"}},
+		{"negative application limit", []string{"--max-applications=-1"}},
+		{"excess application limit", []string{"--max-applications=1000001"}},
+		{"zero field byte limit", []string{"--max-metadata-bytes=0"}},
+		{"excess field byte limit", []string{"--max-metadata-bytes=1073741825"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -159,50 +165,13 @@ func TestGracefulShutdownDrainsAnInFlightRequest(t *testing.T) {
 	}
 	database := filepath.Join(t.TempDir(), "drain.db")
 	s := startServer(t, "sqlite", database)
-	address := strings.TrimPrefix(s.baseURL, "http://")
-	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(6 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
 	body := `{"name":"Drain","email":"drain@example.test"}`
-	headers := fmt.Sprintf(
-		"POST /v1/maintainers HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
-		address, len(body),
-	)
-	if _, err := io.WriteString(conn, headers); err != nil {
-		t.Fatal(err)
-	}
-	reader := bufio.NewReader(conn)
-	request := &http.Request{Method: http.MethodPost}
-	interim, err := http.ReadResponse(reader, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	interim.Body.Close()
-	if interim.StatusCode != http.StatusContinue {
-		t.Fatalf("handler did not begin reading the request: %d", interim.StatusCode)
-	}
+	request := holdPost(t, s, body)
 	if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
 	waitForDrain(t, s)
-	if _, err := io.WriteString(conn, body); err != nil {
-		t.Fatalf("shutdown closed an in-flight request before draining it: %v", err)
-	}
-	result, err := http.ReadResponse(reader, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := io.ReadAll(result.Body)
-	result.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	created := response{status: result.StatusCode, header: result.Header, body: data}.want(t, 201)
+	created := request.finish(t)
 	select {
 	case <-s.exited:
 		s.stopped = true

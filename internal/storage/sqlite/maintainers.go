@@ -22,6 +22,9 @@ func (s *Store) CreateMaintainer(ctx context.Context, input metadata.MaintainerF
 		if err := emailAvailable(ctx, tx, fields.Email, ""); err != nil {
 			return err
 		}
+		if err := s.adjustUsage(ctx, tx, 1, 0, 0, metadata.MaintainerFieldBytes(fields)); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx,
 			"INSERT INTO maintainers ("+maintainerColumns+") VALUES (?, ?, ?, ?, ?, ?)",
 			record.ID, record.Name, record.Email, record.Revision,
@@ -50,19 +53,25 @@ func (s *Store) ListMaintainers(ctx context.Context, options metadata.Maintainer
 		return page, translate(err)
 	}
 	defer func() { _ = rows.Close() }()
+	used := metadata.PageEnvelopeBytes
 	for rows.Next() {
 		record, err := scanMaintainer(rows)
 		if err != nil {
 			return page, translate(err)
 		}
+		size := metadata.MaintainerEncodedBound(record)
+		if len(page.Items) == limit || !metadata.PageItemFits(used, size) {
+			if len(page.Items) == 0 {
+				return page, metadata.NewError(metadata.InternalError, nil)
+			}
+			page.NextAfter = string(page.Items[len(page.Items)-1].ID)
+			break
+		}
 		page.Items = append(page.Items, record)
+		used += size
 	}
 	if err := rows.Err(); err != nil {
 		return page, translate(err)
-	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextAfter = string(page.Items[limit-1].ID)
 	}
 	return page, nil
 }
@@ -102,6 +111,10 @@ func (s *Store) UpdateMaintainer(ctx context.Context, id metadata.MaintainerID, 
 		if err != nil {
 			return err
 		}
+		if err := s.adjustUsage(ctx, tx, 0, 0,
+			metadata.MaintainerFieldBytes(record.MaintainerFields), metadata.MaintainerFieldBytes(fields)); err != nil {
+			return err
+		}
 		now := time.Now().UTC()
 		result, err := tx.ExecContext(ctx,
 			"UPDATE maintainers SET name = ?, email = ?, revision = ?, updated_at = ? WHERE id = ? AND revision = ?",
@@ -122,8 +135,9 @@ func (s *Store) UpdateMaintainer(ctx context.Context, id metadata.MaintainerID, 
 
 func (s *Store) DeleteMaintainer(ctx context.Context, id metadata.MaintainerID, expected []metadata.Revision) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
-		var revision metadata.Revision
-		if err := tx.QueryRowContext(ctx, "SELECT revision FROM maintainers WHERE id = ?", id).Scan(&revision); err != nil {
+		record, err := scanMaintainer(tx.QueryRowContext(ctx,
+			"SELECT "+maintainerColumns+" FROM maintainers WHERE id = ?", id))
+		if err != nil {
 			return err
 		}
 		var count int
@@ -133,10 +147,13 @@ func (s *Store) DeleteMaintainer(ctx context.Context, id metadata.MaintainerID, 
 		if count != 0 {
 			return metadata.NewError(metadata.MaintainerInUse, nil)
 		}
-		if !metadata.Matches(revision, expected) {
+		if !metadata.Matches(record.Revision, expected) {
 			return metadata.NewError(metadata.PreconditionFailed, nil)
 		}
-		result, err := tx.ExecContext(ctx, "DELETE FROM maintainers WHERE id = ? AND revision = ?", id, revision)
+		if err := s.adjustUsage(ctx, tx, -1, 0, metadata.MaintainerFieldBytes(record.MaintainerFields), 0); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, "DELETE FROM maintainers WHERE id = ? AND revision = ?", id, record.Revision)
 		return changedOne(result, err)
 	})
 }

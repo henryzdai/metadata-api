@@ -13,9 +13,10 @@ import (
 )
 
 type Recorder struct {
-	mu     sync.Mutex
-	opens  []int
-	closes int
+	mu       sync.Mutex
+	opens    []int
+	policies []metadata.StoreLimits
+	closes   int
 }
 
 func (r *Recorder) Provider() storage.Provider {
@@ -24,7 +25,10 @@ func (r *Recorder) Provider() storage.Provider {
 		Options: []storage.OptionSpec{{
 			Key: "probe-number", Default: "7", FlagAlias: "probe-number", Help: "positive test-only probe number",
 		}},
-		Prepare: func(values storage.Values) (storage.OpenFunc, error) {
+		Prepare: func(values storage.Values, policy metadata.StorePolicy) (storage.OpenFunc, error) {
+			if err := policy.Validate(); err != nil {
+				return nil, err
+			}
 			number, err := strconv.Atoi(values["probe-number"])
 			if err != nil || number <= 0 || len(values) != 1 {
 				return nil, errors.New("probe-number must be a positive integer")
@@ -33,9 +37,14 @@ func (r *Recorder) Provider() storage.Provider {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				store := &recordedStore{MetadataStore: memory.New(), recorder: r}
+				inner, err := memory.New(policy)
+				if err != nil {
+					return nil, err
+				}
+				store := &recordedStore{MetadataStore: inner, recorder: r}
 				r.mu.Lock()
 				r.opens = append(r.opens, number)
+				r.policies = append(r.policies, policy.Limits())
 				r.mu.Unlock()
 				return store, nil
 			}, nil
@@ -53,6 +62,12 @@ func (r *Recorder) Closes() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.closes
+}
+
+func (r *Recorder) Policies() []metadata.StoreLimits {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.policies)
 }
 
 type recordedStore struct {

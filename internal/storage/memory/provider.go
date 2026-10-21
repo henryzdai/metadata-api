@@ -11,7 +11,10 @@ import (
 func Provider() storage.Provider {
 	return storage.Provider{
 		Name: "memory", Summary: "volatile in-memory storage",
-		Prepare: func(values storage.Values) (storage.OpenFunc, error) {
+		Prepare: func(values storage.Values, policy metadata.StorePolicy) (storage.OpenFunc, error) {
+			if err := policy.Validate(); err != nil {
+				return nil, err
+			}
 			if len(values) != 0 {
 				return nil, errors.New("memory storage does not accept options")
 			}
@@ -19,7 +22,7 @@ func Provider() storage.Provider {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				return New(), nil
+				return New(policy)
 			}, nil
 		},
 	}

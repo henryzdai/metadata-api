@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"metadata-api/internal/httpapi"
+	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage"
 )
 
@@ -15,6 +17,8 @@ type Config struct {
 	Listen          string
 	RequestTimeout  time.Duration
 	ShutdownTimeout time.Duration
+	MaxConnections  int
+	MaxInFlight     int
 	store           storage.PreparedStore
 }
 
@@ -29,6 +33,12 @@ func ParseConfig(args []string, output io.Writer, catalog *storage.Registry) (Co
 	flags.StringVar(&cfg.Listen, "listen", "127.0.0.1:8080", "TCP listen address; port 0 selects a free port")
 	flags.DurationVar(&cfg.RequestTimeout, "request-timeout", 5*time.Second, "maximum request duration")
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown bound")
+	flags.IntVar(&cfg.MaxConnections, "max-connections", 128, "maximum accepted connections (1-2048)")
+	flags.IntVar(&cfg.MaxInFlight, "max-inflight", httpapi.DefaultMaxInFlight, "maximum normal HTTP handlers (1-256)")
+	limits := metadata.DefaultStorePolicy().Limits()
+	flags.IntVar(&limits.MaxMaintainers, "max-maintainers", limits.MaxMaintainers, "maximum stored maintainers (1-1000000)")
+	flags.IntVar(&limits.MaxApplications, "max-applications", limits.MaxApplications, "maximum stored applications (1-1000000)")
+	flags.Int64Var(&limits.MaxFieldBytes, "max-metadata-bytes", limits.MaxFieldBytes, "maximum normalized user-field bytes (1-1073741824)")
 	descriptions := catalog.Descriptions()
 	var choices []string
 	for _, description := range descriptions {
@@ -76,7 +86,14 @@ func ParseConfig(args []string, output io.Writer, catalog *storage.Registry) (Co
 		}
 		options.values[alias.key] = alias.value
 	}
-	plan, err := catalog.Prepare(*selected, options.values)
+	policy, err := metadata.NewStorePolicy(limits)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.validateRuntime(); err != nil {
+		return Config{}, err
+	}
+	plan, err := catalog.Prepare(*selected, options.values, policy)
 	if err != nil {
 		return Config{}, err
 	}
@@ -88,11 +105,21 @@ func (cfg Config) validate() error {
 	if cfg.store.Name() == "" {
 		return errors.New("storage must be prepared by ParseConfig")
 	}
+	return cfg.validateRuntime()
+}
+
+func (cfg Config) validateRuntime() error {
 	if cfg.Listen == "" {
 		return errors.New("--listen must not be empty")
 	}
 	if cfg.RequestTimeout <= 0 || cfg.ShutdownTimeout <= 0 {
 		return errors.New("request and shutdown timeouts must be positive")
+	}
+	if cfg.MaxConnections < 1 || cfg.MaxConnections > 2048 {
+		return errors.New("max-connections must be between 1 and 2048")
+	}
+	if cfg.MaxInFlight < 1 || cfg.MaxInFlight > httpapi.MaxInFlightLimit {
+		return errors.New("max-inflight must be between 1 and 256")
 	}
 	return nil
 }

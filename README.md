@@ -34,6 +34,7 @@ volatile storage with `--storage memory`.
 
 Provider options use `--storage-option key=value`. See the
 [storage guide](docs/STORAGE.md) for configuration and compiled plugin registration.
+The [operations guide](docs/OPERATIONS.md) covers resource budgets and SQLite upgrades.
 
 ## Create an application
 
@@ -91,6 +92,8 @@ The CLI, runtime, handlers, and selected adapter run in one process.
 Startup injects one `MetadataStore` implementation into the handlers.
 Dotted edges show alternatives, not replication or fallback.
 The selected adapter owns atomic revision and creator checks.
+The runtime bounds connections, handlers bound active work, and adapters enforce
+stored-data and list-output budgets.
 
 ### Creator relationship
 
@@ -116,7 +119,7 @@ what each choice protects; the tradeoffs state what it does not provide.
 | One aggregate `MetadataStore`; one compiled provider catalog | Check revisions and relationships atomically, with provider selection and configuration defined in one place. | New providers require a rebuild and the full shared contract. No dynamic loader or external plugin SDK. |
 | SQLite by default | Durable transactions without a separate database service. | Serialized writers on local disk, not a shared filesystem. Multi-host writes need another transactional backend. |
 | Atomic ETag/If-Match mutations | Reject stale edits rather than silently lose another client's changes. | Clients must read and resolve conflicts. This does not provide exactly-once POST. |
-| Strict input, request bounds, deadlines, and safe logs | Bound request work and diagnose failures without exposing payloads. | 64 KiB bodies and 100-item pages are fixed limits, not total-memory or database-size guarantees. |
+| Strict input, bounded work/state, deadlines, and safe logs | Limit retained metadata and response materialization while rejecting overload explicitly. | Logical quotas and per-process limits are not hard RSS or disk caps. See the operations guide. |
 | Shared unit contracts plus real-process HTTP E2E | Check backend parity and failures that handler-only tests miss. | Process isolation and cleanup add complexity. Some checks require Linux. |
 | Loopback first; no authentication or TLS | Keep this MVP focused on metadata correctness rather than an identity platform. | Not ready for public exposure. Deployment needs an authenticated TLS boundary, monitoring, and backups. |
 

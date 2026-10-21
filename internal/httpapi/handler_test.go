@@ -36,7 +36,7 @@ func TestHTTPCRUDAndConditionalWrites(t *testing.T) {
 					values[option.Key] = filepath.Join(testsupport.Workspace(t), "records.db")
 				}
 			}
-			plan, err := catalog.Prepare(backend.Name, values)
+			plan, err := catalog.Prepare(backend.Name, values, metadata.DefaultStorePolicy())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,7 +45,7 @@ func TestHTTPCRUDAndConditionalWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
-			api := httpapi.New(store, nil, time.Second)
+			api := newHandler(t, store, nil, time.Second)
 			created := request(api, "POST", "/v1/maintainers", `{"name":"  River Example  ","email":" RIVER@EXAMPLE.TEST "}`, "")
 			assertStatus(t, created, 201)
 			owner := decode[metadata.Maintainer](t, created)
@@ -122,7 +122,7 @@ func TestHTTPCRUDAndConditionalWrites(t *testing.T) {
 }
 
 func TestConcurrentHTTPWritersHaveOneWinner(t *testing.T) {
-	api := httpapi.New(memory.New(), nil, time.Second)
+	api := newHandler(t, newMemory(t), nil, time.Second)
 	created := request(api, "POST", "/v1/maintainers", `{"name":"Initial","email":"initial@example.test"}`, "")
 	assertStatus(t, created, 201)
 	path, tag := created.Header().Get("Location"), created.Header().Get("ETag")
@@ -199,8 +199,8 @@ func TestStrictJSONAndMediaBoundary(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := memory.New()
-			api := httpapi.New(store, nil, time.Second)
+			store := newMemory(t)
+			api := newHandler(t, store, nil, time.Second)
 			req := httptest.NewRequest("POST", "/v1/maintainers", strings.NewReader(test.body))
 			if test.media != "" {
 				req.Header.Set("Content-Type", test.media)
@@ -216,7 +216,7 @@ func TestStrictJSONAndMediaBoundary(t *testing.T) {
 			}
 		})
 	}
-	api := httpapi.New(memory.New(), nil, time.Second)
+	api := newHandler(t, newMemory(t), nil, time.Second)
 	exact := httptest.NewRequest("POST", "/v1/maintainers", strings.NewReader(good+strings.Repeat(" ", 65536-len(good))))
 	exact.Header.Set("Content-Type", "application/json; charset=utf-8")
 	assertStatus(t, serve(api, exact), 201)
@@ -227,7 +227,7 @@ func TestStrictJSONAndMediaBoundary(t *testing.T) {
 }
 
 func TestRoutingQueriesAndPagination(t *testing.T) {
-	api := httpapi.New(memory.New(), nil, time.Second)
+	api := newHandler(t, newMemory(t), nil, time.Second)
 	for _, path := range []string{"/missing", "/shutdown", "/v1/maintainers/", "/v1/maintainers/a/b", "/v2/maintainers"} {
 		assertError(t, request(api, "GET", path, "", ""), 404, "not_found")
 	}
@@ -288,7 +288,7 @@ func TestRoutingQueriesAndPagination(t *testing.T) {
 }
 
 func TestErrorPrecedenceAndReferenceValidation(t *testing.T) {
-	api := httpapi.New(memory.New(), nil, time.Second)
+	api := newHandler(t, newMemory(t), nil, time.Second)
 	first := request(api, "POST", "/v1/maintainers", `{"name":"First","email":"first@example.test"}`, "")
 	second := request(api, "POST", "/v1/maintainers", `{"name":"Second","email":"second@example.test"}`, "")
 	assertStatus(t, first, 201)
@@ -315,8 +315,8 @@ func TestErrorPrecedenceAndReferenceValidation(t *testing.T) {
 func TestReadinessTimeoutAndSafeLogs(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	store := memory.New()
-	api := httpapi.New(store, logger, time.Second)
+	store := newMemory(t)
+	api := newHandler(t, store, logger, time.Second)
 	assertStatus(t, request(api, "GET", "/healthz", "", ""), 200)
 	assertStatus(t, request(api, "GET", "/readyz", "", ""), 200)
 	owner, err := store.CreateMaintainer(context.Background(), metadata.MaintainerFields{Name: "Example", Email: "not-logged@example.test"})
@@ -349,7 +349,7 @@ func TestReadinessTimeoutAndSafeLogs(t *testing.T) {
 	assertError(t, request(api, "GET", "/readyz", "", ""), 503, "unavailable")
 	assertStatus(t, request(api, "GET", "/healthz", "", ""), 200)
 	_ = store.Close()
-	closed := httpapi.New(store, nil, time.Second)
+	closed := newHandler(t, store, nil, time.Second)
 	assertError(t, request(closed, "GET", "/readyz", "", ""), 503, "unavailable")
 	assertError(t, request(closed, "GET", "/v1/maintainers", "", ""), 503, "unavailable")
 	for _, test := range []struct {
@@ -358,12 +358,12 @@ func TestReadinessTimeoutAndSafeLogs(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"raw storage error", &faultStore{MetadataStore: memory.New(), failure: errors.New("SQL SELECT private payload")}, 500, "internal_error"},
-		{"panic", &faultStore{MetadataStore: memory.New(), panicGet: true}, 500, "internal_error"},
-		{"deadline", &faultStore{MetadataStore: memory.New(), waitForDeadline: true}, 503, "unavailable"},
+		{"raw storage error", &faultStore{MetadataStore: newMemory(t), failure: errors.New("SQL SELECT private payload")}, 500, "internal_error"},
+		{"panic", &faultStore{MetadataStore: newMemory(t), panicGet: true}, 500, "internal_error"},
+		{"deadline", &faultStore{MetadataStore: newMemory(t), waitForDeadline: true}, 503, "unavailable"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			faulty := httpapi.New(test.fault, nil, 10*time.Millisecond)
+			faulty := newHandler(t, test.fault, nil, 10*time.Millisecond)
 			response := request(faulty, "GET", "/v1/maintainers/"+metadata.NewUUID(), "", "")
 			assertError(t, response, test.status, test.code)
 			if strings.Contains(response.Body.String(), "SQL") || strings.Contains(response.Body.String(), "private") {
@@ -376,8 +376,8 @@ func TestReadinessTimeoutAndSafeLogs(t *testing.T) {
 func TestPanicRecoveryLogsWithoutPayloads(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	store := &faultStore{MetadataStore: memory.New(), panicGet: true}
-	api := httpapi.New(store, logger, time.Second)
+	store := &faultStore{MetadataStore: newMemory(t), panicGet: true}
+	api := newHandler(t, store, logger, time.Second)
 	response := request(api, "GET", "/v1/maintainers/"+metadata.NewUUID(), "", "")
 	assertError(t, response, 500, "internal_error")
 	log := logs.String()
@@ -395,7 +395,7 @@ func TestPanicRecoveryLogsWithoutPayloads(t *testing.T) {
 func TestPanicAfterResponseStartAbortsTheConnection(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	api := httpapi.New(memory.New(), logger, time.Second)
+	api := newHandler(t, newMemory(t), logger, time.Second)
 	recorder := httptest.NewRecorder()
 	writer := &panicAfterWrite{ResponseWriter: recorder}
 	var recovered any
@@ -498,6 +498,7 @@ func assertError(t *testing.T, response *httptest.ResponseRecorder, status int, 
 		} `json:"error"`
 		RequestID string `json:"request_id"`
 	}
+
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
@@ -507,4 +508,25 @@ func assertError(t *testing.T, response *httptest.ResponseRecorder, status int, 
 	if status == 422 && code == "validation_failed" && reflect.DeepEqual(envelope.Error.Fields, map[string]string(nil)) {
 		t.Fatal("validation error has no fields")
 	}
+}
+
+func newMemory(t *testing.T) *memory.Store {
+	t.Helper()
+	store, err := memory.New(metadata.DefaultStorePolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func newHandler(t *testing.T, store metadata.MetadataStore, logger *slog.Logger, timeout time.Duration) *httpapi.Handler {
+	t.Helper()
+	handler, err := httpapi.New(store, logger, httpapi.Options{
+		RequestTimeout: timeout, MaxInFlight: httpapi.DefaultMaxInFlight,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
 }

@@ -249,14 +249,17 @@
         "tags": ["Operations"],
         "operationId": "health",
         "summary": "Read process liveness",
-        "responses": {"200": {
-          "description": "Process is serving",
-          "content": {"application/json": {"schema": {
-            "type": "object",
-            "required": ["status"],
-            "properties": {"status": {"const": "ok"}}
-          }}}
-        }}
+        "responses": {
+          "200": {
+            "description": "Process is serving",
+            "content": {"application/json": {"schema": {
+              "type": "object",
+              "required": ["status"],
+              "properties": {"status": {"const": "ok"}}
+            }}}
+          },
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
       }
     },
     "/readyz": {
@@ -274,7 +277,7 @@
   "components": {
     "parameters": {
       "ID": {"name": "id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ID"}},
-      "Limit": {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+      "Limit": {"name": "limit", "in": "query", "description": "Maximum item count. A page can be shorter to keep encoded JSON within 1 MiB; follow next_after until absent.", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
       "After": {"name": "after", "in": "query", "description": "Exclusive lexical ID cursor.", "schema": {"$ref": "#/components/schemas/ID"}},
       "CreatorFilter": {"name": "maintainer_id", "in": "query", "description": "Filter by the recorded immutable creator, not a current responsibility assignment.", "schema": {"$ref": "#/components/schemas/ID"}},
       "IfMatch": {
@@ -289,6 +292,7 @@
     "headers": {
       "RequestID": {"description": "Server-generated request correlation ID.", "schema": {"type": "string"}},
       "Location": {"description": "Relative path of the created resource.", "schema": {"type": "string"}},
+      "RetryAfter": {"description": "Advisory delay in seconds when known. Admission overload returns 1; storage capacity rejection does not invent a retry time.", "schema": {"type": "integer", "minimum": 1}},
       "ETag": {
         "description": "Strong resource-bound representation validator. m1 identifies a Maintainer; a1 identifies an Application.",
         "schema": {"type": "string"},
@@ -387,6 +391,8 @@
       },
       "MaintainerPage": {
         "type": "object",
+        "description": "A cursor page bounded by the requested item count and 1 MiB of encoded JSON. Follow next_after even when the page has fewer items than requested.",
+        "x-max-response-bytes": 1048576,
         "additionalProperties": false,
         "required": ["items"],
         "properties": {
@@ -396,6 +402,8 @@
       },
       "ApplicationPage": {
         "type": "object",
+        "description": "A cursor page bounded by the requested item count and 1 MiB of encoded JSON. Follow next_after even when the page has fewer items than requested.",
+        "x-max-response-bytes": 1048576,
         "additionalProperties": false,
         "required": ["items"],
         "properties": {
@@ -472,8 +480,11 @@
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
       },
       "Unavailable": {
-        "description": "unavailable. Storage contention, deadline, or readiness failure. Inspect current state before retrying a write whose outcome is uncertain.",
-        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "description": "unavailable, overloaded, or resource_capacity_exceeded. Includes storage contention, deadlines, readiness failure, full request admission, and growing writes beyond configured resource limits. Inspect current state before retrying a write whose outcome is uncertain.",
+        "headers": {
+          "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+          "Retry-After": {"$ref": "#/components/headers/RetryAfter"}
+        },
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
       },
       "InternalError": {

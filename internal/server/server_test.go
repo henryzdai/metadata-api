@@ -27,7 +27,8 @@ func TestConfigDefaultsAndValidation(t *testing.T) {
 	catalog := builtinCatalog(t)
 	cfg, err := server.ParseConfig(nil, io.Discard, catalog)
 	if err != nil || cfg.Listen != "127.0.0.1:8080" ||
-		cfg.RequestTimeout != 5*time.Second || cfg.ShutdownTimeout != 10*time.Second {
+		cfg.RequestTimeout != 5*time.Second || cfg.ShutdownTimeout != 10*time.Second ||
+		cfg.MaxConnections != 128 || cfg.MaxInFlight != 16 {
 		t.Fatalf("defaults = %#v, %v", cfg, err)
 	}
 	for _, args := range [][]string{
@@ -119,7 +120,7 @@ func TestStartupFailuresHaveNoListeningEventOrFallback(t *testing.T) {
 }
 
 func TestShutdownDrainsAnInFlightRequest(t *testing.T) {
-	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=2s", "--shutdown-timeout=1s")
+	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=2s", "--shutdown-timeout=1s", "--max-inflight=1")
 	service := start(t, cfg, "memory", false)
 	body := `{"name":"Draining Example","email":"drain@example.test"}`
 	connection, reader := beginBody(t, service, len(body))
@@ -143,7 +144,7 @@ func TestShutdownDrainsAnInFlightRequest(t *testing.T) {
 }
 
 func TestShutdownForcesClosedStalledRequestsAtTheBound(t *testing.T) {
-	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=2s", "--shutdown-timeout=30ms")
+	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=2s", "--shutdown-timeout=30ms", "--max-inflight=1")
 	service := start(t, cfg, "memory", false)
 	connection, _ := beginBody(t, service, 100)
 	defer func() { _ = connection.Close() }()

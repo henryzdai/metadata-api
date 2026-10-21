@@ -17,7 +17,7 @@ func TestProviderCapturesValidatedFilesystemPath(t *testing.T) {
 	path := filepath.Join(testsupport.Workspace(t), "captured = # & %.db")
 	unused := filepath.Join(testsupport.Workspace(t), "unused.db")
 	values := storage.Values{"path": path}
-	open, err := Provider().Prepare(values)
+	open, err := Provider().Prepare(values, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestProviderCapturesValidatedFilesystemPath(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(context.Background(), path)
+	reopened, err := Open(context.Background(), path, metadata.DefaultStorePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestProviderRejectsInvalidValuesWithoutOpening(t *testing.T) {
 		nil, {"path": ""}, {"path": " \t "}, {"path": "private\x00value"},
 		{"path": "valid.db", "unknown": "private-value"},
 	} {
-		if open, err := Provider().Prepare(values); open != nil || err == nil ||
+		if open, err := Provider().Prepare(values, metadata.DefaultStorePolicy()); open != nil || err == nil ||
 			strings.Contains(err.Error(), "private") {
 			t.Fatalf("invalid provider values returned opener %v, error %v", open != nil, err)
 		}

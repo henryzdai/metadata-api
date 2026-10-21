@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"metadata-api/internal/metadata"
 	"metadata-api/internal/server"
 	"metadata-api/internal/storage"
 	"metadata-api/internal/storage/builtin"
@@ -62,7 +63,10 @@ func TestStorageOptionValidationAndSafeErrors(t *testing.T) {
 }
 
 func TestParserRejectsReservedAliasesAndAbsentCatalog(t *testing.T) {
-	for _, name := range []string{"listen", "storage", "storage-option", "request-timeout", "shutdown-timeout", "help", "h"} {
+	for _, name := range []string{
+		"listen", "storage", "storage-option", "request-timeout", "shutdown-timeout",
+		"max-connections", "max-inflight", "max-maintainers", "max-applications", "max-metadata-bytes", "help", "h",
+	} {
 		t.Run(name, func(t *testing.T) {
 			provider := memory.Provider()
 			provider.Options = []storage.OptionSpec{{Key: "collision", FlagAlias: name}}
@@ -87,9 +91,9 @@ func TestParserUsesTheCatalogDefaultAndPreparesOnlyOnce(t *testing.T) {
 	provider := recorder.Provider()
 	prepare := provider.Prepare
 	preparations := 0
-	provider.Prepare = func(values storage.Values) (storage.OpenFunc, error) {
+	provider.Prepare = func(values storage.Values, policy metadata.StorePolicy) (storage.OpenFunc, error) {
 		preparations++
-		return prepare(values)
+		return prepare(values, policy)
 	}
 	catalog, err := storage.NewRegistry(provider.Name, provider)
 	if err != nil {
@@ -160,7 +164,7 @@ func TestSQLiteAliasAndGenericOptionPreserveFilesystemPaths(t *testing.T) {
 func TestPreparationFailurePreservesCauseWithoutExposingValues(t *testing.T) {
 	cause := errors.New("private-option-value")
 	provider := (&probe.Recorder{}).Provider()
-	provider.Prepare = func(storage.Values) (storage.OpenFunc, error) { return nil, cause }
+	provider.Prepare = func(storage.Values, metadata.StorePolicy) (storage.OpenFunc, error) { return nil, cause }
 	catalog, err := builtin.NewRegistry(provider)
 	if err != nil {
 		t.Fatal(err)

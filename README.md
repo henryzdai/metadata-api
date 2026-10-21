@@ -32,6 +32,9 @@ On Linux or macOS, use `./cmd/metadata-server` and `./...` instead.
 Configure the address with `--listen`, the SQLite path with `--db`, or select
 volatile storage with `--storage memory`.
 
+Provider options use `--storage-option key=value`. See the
+[storage guide](docs/STORAGE.md) for configuration and compiled plugin registration.
+
 ## Create an application
 
 Create its Maintainer first, then use the returned ID:
@@ -110,7 +113,7 @@ what each choice protects; the tradeoffs state what it does not provide.
 | Go, standard HTTP, JSON, and PUT | One executable and an explicit API without a large framework. | Handwritten routing and validation. PUT replaces mutable fields; no PATCH or YAML. |
 | One immutable creator; unique lowercase ASCII email | Prevent orphaned Applications and ambiguous creator records. | No creator reassignment or multi-maintainer model. Email uniqueness is a contact policy, not authentication. |
 | UUID IDs and a separate revision | Keep identifiers backend-neutral and concurrency independent of business `version`. | UUID order is not creation order. Pagination across requests is not a snapshot. |
-| One aggregate `MetadataStore`; compiled adapters | Check revisions and relationships atomically across both resources, without a dynamic loader. | Each adapter must preserve the whole contract. Memory uses one lock but loses data on restart. |
+| One aggregate `MetadataStore`; one compiled provider catalog | Check revisions and relationships atomically, with provider selection and configuration defined in one place. | New providers require a rebuild and the full shared contract. No dynamic loader or external plugin SDK. |
 | SQLite by default | Durable transactions without a separate database service. | Serialized writers on local disk, not a shared filesystem. Multi-host writes need another transactional backend. |
 | Atomic ETag/If-Match mutations | Reject stale edits rather than silently lose another client's changes. | Clients must read and resolve conflicts. This does not provide exactly-once POST. |
 | Strict input, request bounds, deadlines, and safe logs | Bound request work and diagnose failures without exposing payloads. | 64 KiB bodies and 100-item pages are fixed limits, not total-memory or database-size guarantees. |
@@ -134,7 +137,8 @@ the MVP.
 | [`internal/server/`](internal/server/) | Configuration, backend selection, listener, and shutdown. |
 | [`internal/metadata/`](internal/metadata/) | Resource models, validation, revisions, and the storage contract. |
 | [`internal/httpapi/`](internal/httpapi/) | Routing, JSON requests and responses, and ETag preconditions. |
-| [`internal/storage/`](internal/storage/) | SQLite and memory adapters plus shared contract tests. |
+| [`internal/storage/`](internal/storage/) | Provider registration and SQLite/memory implementations. |
+| [`internal/storagetest/`](internal/storagetest/) | Shared observable contract for every adapter. |
 | [`e2e/`](e2e/) | Real-process HTTP, concurrency, restart, and shutdown tests. |
 
 ## Verification
@@ -155,6 +159,9 @@ For logs and coverage:
 
 This requires PowerShell 7. If Go is not on PATH, pass `-GoExecutable` with its path.
 Results are saved under `artifacts`.
+
+Current coverage instruments this executable's module packages. Contract-runner
+and test-provider code are excluded so test scaffolding does not inflate the result.
 
 The [successful MVP Linux CI run](https://github.com/henryzdai/metadata-api/actions/runs/39508357704)
 passed unit tests, shared storage contracts, real-process HTTP E2E, the race

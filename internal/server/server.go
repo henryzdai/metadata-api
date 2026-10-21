@@ -12,9 +12,6 @@ import (
 	"time"
 
 	"metadata-api/internal/httpapi"
-	"metadata-api/internal/metadata"
-	"metadata-api/internal/storage/memory"
-	"metadata-api/internal/storage/sqlite"
 )
 
 func Run(ctx context.Context, cfg Config, stdout, stderr io.Writer) (runErr error) {
@@ -23,7 +20,7 @@ func Run(ctx context.Context, cfg Config, stdout, stderr io.Writer) (runErr erro
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
 	startupCtx, startupCancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	store, err := openStore(startupCtx, cfg)
+	store, err := cfg.store.Open(startupCtx)
 	startupCancel()
 	if err != nil {
 		return fmt.Errorf("initialize storage: %w", err)
@@ -64,8 +61,8 @@ func Run(ctx context.Context, cfg Config, stdout, stderr io.Writer) (runErr erro
 	}{
 		Event:   "listening",
 		Addr:    listener.Addr().String(),
-		Storage: cfg.Storage,
-		Durable: cfg.Storage == "sqlite",
+		Storage: cfg.store.Name(),
+		Durable: cfg.store.Durable(),
 	}); err != nil {
 		return errors.New("cannot write listening event")
 	}
@@ -94,16 +91,5 @@ func Run(ctx context.Context, cfg Config, stdout, stderr io.Writer) (runErr erro
 			return errors.New("graceful shutdown deadline exceeded")
 		}
 		return nil
-	}
-}
-
-func openStore(ctx context.Context, cfg Config) (metadata.MetadataStore, error) {
-	switch cfg.Storage {
-	case "memory":
-		return memory.New(), nil
-	case "sqlite":
-		return sqlite.Open(ctx, cfg.DBPath)
-	default:
-		return nil, errors.New("unsupported storage backend")
 	}
 }

@@ -54,7 +54,13 @@ try {
     $phase = "unit"
     $coverage = Join-Path $artifacts "coverage.out"
     $corePackages = @((Join-Path "." "internal\..."), (Join-Path "." "cmd\..."))
-    Invoke-Go -Arguments (@("test", "-count=1", "-shuffle=on", "-coverpkg=metadata-api/internal/...,metadata-api/cmd/...", "-coverprofile=$coverage") + $corePackages) -Log "unit.txt"
+    $dependencies = @(& $go list -deps (Join-Path "." "cmd\..."))
+    if ($LASTEXITCODE -ne 0) { throw "Cannot identify executable packages for coverage." }
+    $productionPackages = @($dependencies | Where-Object { $_.StartsWith("metadata-api/") })
+    if ($productionPackages.Count -eq 0) { throw "No executable packages were found for coverage." }
+    $productionPackages | Set-Content -LiteralPath (Join-Path $artifacts "coverage-packages.txt")
+    $coverPackages = $productionPackages -join ","
+    Invoke-Go -Arguments (@("test", "-count=1", "-shuffle=on", "-coverpkg=$coverPackages", "-coverprofile=$coverage") + $corePackages) -Log "unit.txt"
     Invoke-Go -Arguments @("tool", "cover", "-func=$coverage") -Log "coverage-summary.txt"
     $phase = "build"
     $bin = Join-Path $PSScriptRoot "bin"

@@ -7,7 +7,12 @@ import (
 	"testing"
 
 	"metadata-api/internal/metadata"
+	"metadata-api/internal/storagetest"
 )
+
+func TestMetadataStoreContract(t *testing.T) {
+	storagetest.Contract(t, func(*testing.T) metadata.MetadataStore { return New() })
+}
 
 func TestExhaustedRevisionDoesNotMutate(t *testing.T) {
 	store := New()

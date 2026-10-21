@@ -95,6 +95,11 @@ func TestStartupErrorsNeverFallback(t *testing.T) {
 	}{
 		{"unknown backend", []string{"--storage", "not-a-backend"}},
 		{"unopenable SQLite", []string{"--storage", "sqlite", "--db", t.TempDir()}},
+		{"unknown storage option", []string{"--storage-option", "unknown=value"}},
+		{"malformed storage option", []string{"--storage-option", "path"}},
+		{"duplicate storage option", []string{"--storage-option", "path=one.db", "--storage-option", "path=two.db"}},
+		{"alias and generic conflict", []string{"--db", "one.db", "--storage-option", "path=one.db"}},
+		{"memory rejects db alias", []string{"--storage", "memory", "--db", "unused.db"}},
 		{"zero request timeout", []string{"--storage", "memory", "--request-timeout", "0s"}},
 		{"negative shutdown timeout", []string{"--storage", "memory", "--shutdown-timeout", "-1s"}},
 	}
@@ -104,6 +109,7 @@ func TestStartupErrorsNeverFallback(t *testing.T) {
 			defer cancel()
 			args := append([]string{"--listen", "127.0.0.1:0"}, test.args...)
 			cmd := exec.CommandContext(ctx, serverBinary, args...)
+			cmd.Dir = t.TempDir()
 			output, err := cmd.CombinedOutput()
 			if ctx.Err() != nil {
 				t.Fatalf("invalid startup did not fail promptly: %s", output)

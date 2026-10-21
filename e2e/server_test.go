@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"metadata-api/internal/storage"
+	"metadata-api/internal/storage/builtin"
 )
 
 var serverBinary string
@@ -110,8 +113,27 @@ type apiError struct {
 	RequestID string `json:"request_id"`
 }
 
-func startServer(t *testing.T, backend, database string) *server {
+func backendRegistry(t *testing.T) *storage.Registry {
 	t.Helper()
+	catalog, err := builtin.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func startServer(t *testing.T, backend, database string, extraArgs ...string) *server {
+	t.Helper()
+	var description storage.Description
+	for _, candidate := range backendRegistry(t).Descriptions() {
+		if candidate.Name == backend {
+			description = candidate
+			break
+		}
+	}
+	if description.Name == "" {
+		t.Fatalf("test requested an unregistered backend: %s", backend)
+	}
 	root := os.Getenv("E2E_ARTIFACTS_DIR")
 	if root == "" {
 		root = t.TempDir()
@@ -135,10 +157,17 @@ func startServer(t *testing.T, backend, database string) *server {
 		"--listen", "127.0.0.1:0", "--storage", backend,
 		"--shutdown-timeout", "3s",
 	}
-	if backend == "sqlite" && database != "" {
-		args = append(args, "--db", database)
+	if database != "" {
+		for _, option := range description.Options {
+			if option.FlagAlias == "db" {
+				args = append(args, "--storage-option", option.Key+"="+database)
+			}
+		}
 	}
+	args = append(args, extraArgs...)
 	cmd := exec.Command(serverBinary, args...)
+	// Windows process startup has stricter directory-length limits than artifact file I/O.
+	cmd.Dir = t.TempDir()
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	s := &server{
 		cmd: cmd, exited: make(chan struct{}), stdout: stdout, stderr: stderr,
@@ -202,7 +231,7 @@ func startServer(t *testing.T, backend, database string) *server {
 					Durable *bool  `json:"durable"`
 				}
 				if json.Unmarshal(line, &event) == nil && event.Event == "listening" {
-					if event.Storage != backend || event.Durable == nil || *event.Durable != (backend == "sqlite") {
+					if event.Storage != backend || event.Durable == nil || *event.Durable != description.Durable {
 						t.Fatalf("incorrect backend announcement: %s", line)
 					}
 					s.baseURL = "http://" + event.Addr

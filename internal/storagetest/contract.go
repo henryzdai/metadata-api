@@ -1,10 +1,9 @@
-package storage_test
+package storagetest
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"sync"
@@ -12,25 +11,10 @@ import (
 	"time"
 
 	"metadata-api/internal/metadata"
-	"metadata-api/internal/storage/memory"
-	"metadata-api/internal/storage/sqlite"
-	"metadata-api/internal/testsupport"
 )
 
-func TestMetadataStoreContract(t *testing.T) {
-	backends := []struct {
-		name string
-		open func(*testing.T) metadata.MetadataStore
-	}{
-		{"memory", func(t *testing.T) metadata.MetadataStore { return memory.New() }},
-		{"sqlite", func(t *testing.T) metadata.MetadataStore {
-			store, err := sqlite.Open(context.Background(), filepath.Join(testsupport.Workspace(t), "records.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return store
-		}},
-	}
+func Contract(t *testing.T, open func(*testing.T) metadata.MetadataStore) {
+	t.Helper()
 	tests := []struct {
 		name string
 		run  func(*testing.T, metadata.MetadataStore)
@@ -45,19 +29,15 @@ func TestMetadataStoreContract(t *testing.T) {
 		{"creator delete versus application create", creatorRace},
 		{"cancellation and closure", lifecycle},
 	}
-	for _, backend := range backends {
-		t.Run(backend.name, func(t *testing.T) {
-			for _, test := range tests {
-				t.Run(test.name, func(t *testing.T) {
-					store := backend.open(t)
-					t.Cleanup(func() {
-						if err := store.Close(); err != nil {
-							t.Error(err)
-						}
-					})
-					test.run(t, store)
-				})
-			}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := open(t)
+			t.Cleanup(func() {
+				if err := store.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			test.run(t, store)
 		})
 	}
 }

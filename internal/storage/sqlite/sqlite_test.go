@@ -11,8 +11,19 @@ import (
 	"time"
 
 	"metadata-api/internal/metadata"
+	"metadata-api/internal/storagetest"
 	"metadata-api/internal/testsupport"
 )
+
+func TestMetadataStoreContract(t *testing.T) {
+	storagetest.Contract(t, func(t *testing.T) metadata.MetadataStore {
+		store, err := Open(context.Background(), filepath.Join(testsupport.Workspace(t), "records.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	})
+}
 
 func TestDurableReopenAndEscapedFilesystemPath(t *testing.T) {
 	ctx := context.Background()

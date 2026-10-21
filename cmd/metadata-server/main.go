@@ -10,16 +10,22 @@ import (
 	"syscall"
 
 	"metadata-api/internal/server"
+	"metadata-api/internal/storage/builtin"
 )
 
 func main() { os.Exit(run()) }
 
 func run() int {
-	cfg, err := server.ParseConfig(os.Args[1:], os.Stderr)
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	catalog, err := builtin.NewRegistry()
+	if err != nil {
+		logger.Error("startup_failed", "error", err.Error())
+		return 1
+	}
+	cfg, err := server.ParseConfig(os.Args[1:], os.Stderr, catalog)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	if err != nil {
 		logger.Error("startup_failed", "error", err.Error())
 		return 1

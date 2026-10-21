@@ -18,13 +18,16 @@ import (
 	"time"
 
 	"metadata-api/internal/server"
+	"metadata-api/internal/storage"
+	"metadata-api/internal/storage/builtin"
 	"metadata-api/internal/testsupport"
 )
 
 func TestConfigDefaultsAndValidation(t *testing.T) {
-	cfg, err := server.ParseConfig(nil, io.Discard)
-	if err != nil || cfg.Listen != "127.0.0.1:8080" || cfg.Storage != "sqlite" ||
-		cfg.DBPath != "data/metadata.db" || cfg.RequestTimeout != 5*time.Second || cfg.ShutdownTimeout != 10*time.Second {
+	catalog := builtinCatalog(t)
+	cfg, err := server.ParseConfig(nil, io.Discard, catalog)
+	if err != nil || cfg.Listen != "127.0.0.1:8080" ||
+		cfg.RequestTimeout != 5*time.Second || cfg.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("defaults = %#v, %v", cfg, err)
 	}
 	for _, args := range [][]string{
@@ -32,26 +35,32 @@ func TestConfigDefaultsAndValidation(t *testing.T) {
 		{"--shutdown-timeout=-1s"}, {"--storage=memory", "--db=records.db"}, {"extra"},
 		{"--unknown"}, {"--request-timeout=invalid"},
 	} {
-		if _, err := server.ParseConfig(args, io.Discard); err == nil {
+		if _, err := server.ParseConfig(args, io.Discard, catalog); err == nil {
 			t.Errorf("accepted invalid flags %v", args)
 		}
 	}
 	var help bytes.Buffer
-	if _, err := server.ParseConfig([]string{"--help"}, &help); !errors.Is(err, flag.ErrHelp) ||
+	if _, err := server.ParseConfig([]string{"--help"}, &help, catalog); !errors.Is(err, flag.ErrHelp) ||
 		!strings.Contains(help.String(), "volatile") || !strings.Contains(help.String(), "filesystem path") {
 		t.Fatalf("help = %q, %v", help.String(), err)
 	}
 }
 
 func TestRealListenerLifecycleAndBackendSelection(t *testing.T) {
-	for _, backend := range []string{"memory", "sqlite"} {
-		t.Run(backend, func(t *testing.T) {
-			cfg := server.Config{
-				Listen: "127.0.0.1:0", Storage: backend,
-				DBPath:         filepath.Join(testsupport.Workspace(t), "records.db"),
-				RequestTimeout: time.Second, ShutdownTimeout: 2 * time.Second,
+	catalog := builtinCatalog(t)
+	for _, backend := range catalog.Descriptions() {
+		t.Run(backend.Name, func(t *testing.T) {
+			args := []string{
+				"--listen=127.0.0.1:0", "--storage=" + backend.Name,
+				"--request-timeout=1s", "--shutdown-timeout=2s",
 			}
-			first := start(t, cfg)
+			for _, option := range backend.Options {
+				if option.FlagAlias == "db" {
+					args = append(args, "--db="+filepath.Join(testsupport.Workspace(t), "records.db"))
+				}
+			}
+			cfg := parseWithCatalog(t, catalog, args...)
+			first := start(t, cfg, backend.Name, backend.Durable)
 			for _, path := range []string{"/healthz", "/readyz"} {
 				response := first.do(t, "GET", path, "")
 				if response.StatusCode != 200 {
@@ -66,14 +75,14 @@ func TestRealListenerLifecycleAndBackendSelection(t *testing.T) {
 			location := created.Header.Get("Location")
 			consume(t, created)
 			first.stop(t)
-			second := start(t, cfg)
+			second := start(t, cfg, backend.Name, backend.Durable)
 			read := second.do(t, "GET", location, "")
 			want := 404
-			if backend == "sqlite" {
+			if backend.Durable {
 				want = 200
 			}
 			if read.StatusCode != want {
-				t.Fatalf("%s restarted read = %d, want %d", backend, read.StatusCode, want)
+				t.Fatalf("%s restarted read = %d, want %d", backend.Name, read.StatusCode, want)
 			}
 			consume(t, read)
 			second.stop(t)
@@ -82,25 +91,19 @@ func TestRealListenerLifecycleAndBackendSelection(t *testing.T) {
 }
 
 func TestStartupFailuresHaveNoListeningEventOrFallback(t *testing.T) {
-	base := server.Config{
-		Listen: "127.0.0.1:0", Storage: "sqlite", RequestTimeout: time.Second, ShutdownTimeout: time.Second,
-	}
-	base.DBPath = testsupport.Workspace(t)
+	base := parse(t, "--listen=127.0.0.1:0", "--db="+testsupport.Workspace(t))
 	var stdout, stderr bytes.Buffer
 	if err := server.Run(context.Background(), base, &stdout, &stderr); err == nil || stdout.Len() != 0 {
 		t.Fatalf("unusable SQLite path did not fail startup: stdout %q, error %v", stdout.String(), err)
 	}
-	base.Storage = "memory"
-	base.Listen = "not-an-address"
+	base = parse(t, "--storage=memory", "--listen=not-an-address")
 	if err := server.Run(context.Background(), base, &stdout, &stderr); err == nil || stdout.Len() != 0 {
 		t.Fatalf("invalid listen address did not fail startup: stdout %q, error %v", stdout.String(), err)
 	}
-	base.Storage = "unknown"
-	if err := server.Run(context.Background(), base, &stdout, &stderr); err == nil {
-		t.Fatal("unrecognized storage silently fell back")
+	if err := server.Run(context.Background(), server.Config{}, &stdout, &stderr); err == nil {
+		t.Fatal("unprepared config silently opened a default store")
 	}
-	base.Storage = "memory"
-	base.Listen = "127.0.0.1:0"
+	base = parse(t, "--storage=memory", "--listen=127.0.0.1:0")
 	if err := server.Run(context.Background(), base, brokenWriter{}, &stderr); err == nil {
 		t.Fatal("stdout failure was ignored")
 	}
@@ -116,11 +119,8 @@ func TestStartupFailuresHaveNoListeningEventOrFallback(t *testing.T) {
 }
 
 func TestShutdownDrainsAnInFlightRequest(t *testing.T) {
-	cfg := server.Config{
-		Listen: "127.0.0.1:0", Storage: "memory",
-		RequestTimeout: 2 * time.Second, ShutdownTimeout: time.Second,
-	}
-	service := start(t, cfg)
+	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=2s", "--shutdown-timeout=1s")
+	service := start(t, cfg, "memory", false)
 	body := `{"name":"Draining Example","email":"drain@example.test"}`
 	connection, reader := beginBody(t, service, len(body))
 	defer func() { _ = connection.Close() }()
@@ -143,22 +143,16 @@ func TestShutdownDrainsAnInFlightRequest(t *testing.T) {
 }
 
 func TestShutdownForcesClosedStalledRequestsAtTheBound(t *testing.T) {
-	cfg := server.Config{
-		Listen: "127.0.0.1:0", Storage: "memory",
-		RequestTimeout: 2 * time.Second, ShutdownTimeout: 30 * time.Millisecond,
-	}
-	service := start(t, cfg)
+	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=2s", "--shutdown-timeout=30ms")
+	service := start(t, cfg, "memory", false)
 	connection, _ := beginBody(t, service, 100)
 	defer func() { _ = connection.Close() }()
 	service.stopExpecting(t, "graceful shutdown deadline exceeded")
 }
 
 func TestListenerBoundsHeaders(t *testing.T) {
-	cfg := server.Config{
-		Listen: "127.0.0.1:0", Storage: "memory",
-		RequestTimeout: 100 * time.Millisecond, ShutdownTimeout: time.Second,
-	}
-	service := start(t, cfg)
+	cfg := parse(t, "--storage=memory", "--listen=127.0.0.1:0", "--request-timeout=100ms", "--shutdown-timeout=1s")
+	service := start(t, cfg, "memory", false)
 	connection, err := net.DialTimeout("tcp", strings.TrimPrefix(service.url, "http://"), time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +252,7 @@ type instance struct {
 	once   sync.Once
 }
 
-func start(t *testing.T, cfg server.Config) *instance {
+func start(t *testing.T, cfg server.Config, name string, durable bool) *instance {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	output := &eventWriter{events: make(chan []byte, 2)}
@@ -277,7 +271,7 @@ func start(t *testing.T, cfg server.Config) *instance {
 			Durable bool   `json:"durable"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil || event.Event != "listening" ||
-			event.Storage != cfg.Storage || event.Durable != (cfg.Storage == "sqlite") ||
+			event.Storage != name || event.Durable != durable ||
 			!strings.HasPrefix(event.Addr, "127.0.0.1:") || strings.HasSuffix(event.Addr, ":0") {
 			t.Fatalf("startup event = %s, error %v", data, err)
 		}
@@ -315,14 +309,17 @@ func (s *instance) stopExpecting(t *testing.T, expected string) {
 	})
 }
 
-func (s *instance) do(t *testing.T, method, path, body string) *http.Response {
+func (s *instance) do(t *testing.T, method, path, body string, condition ...string) *http.Response {
 	t.Helper()
 	request, err := http.NewRequest(method, s.url+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if method == "POST" {
+	if method == "POST" || method == "PUT" {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	if len(condition) != 0 {
+		request.Header.Set("If-Match", condition[0])
 	}
 	response, err := s.client.Do(request)
 	if err != nil {
@@ -339,4 +336,27 @@ func consume(t *testing.T, response *http.Response) {
 	if err := response.Body.Close(); err != nil {
 		t.Error(err)
 	}
+}
+
+func builtinCatalog(t *testing.T) *storage.Registry {
+	t.Helper()
+	catalog, err := builtin.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func parse(t *testing.T, args ...string) server.Config {
+	t.Helper()
+	return parseWithCatalog(t, builtinCatalog(t), args...)
+}
+
+func parseWithCatalog(t *testing.T, catalog *storage.Registry, args ...string) server.Config {
+	t.Helper()
+	cfg, err := server.ParseConfig(args, io.Discard, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

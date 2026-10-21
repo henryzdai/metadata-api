@@ -17,21 +17,32 @@ import (
 
 	"metadata-api/internal/httpapi"
 	"metadata-api/internal/metadata"
+	"metadata-api/internal/storage"
+	"metadata-api/internal/storage/builtin"
 	"metadata-api/internal/storage/memory"
-	"metadata-api/internal/storage/sqlite"
 	"metadata-api/internal/testsupport"
 )
 
 func TestHTTPCRUDAndConditionalWrites(t *testing.T) {
-	for _, backend := range []string{"memory", "sqlite"} {
-		t.Run(backend, func(t *testing.T) {
-			var store metadata.MetadataStore = memory.New()
-			if backend == "sqlite" {
-				var err error
-				store, err = sqlite.Open(context.Background(), filepath.Join(testsupport.Workspace(t), "records.db"))
-				if err != nil {
-					t.Fatal(err)
+	catalog, err := builtin.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, backend := range catalog.Descriptions() {
+		t.Run(backend.Name, func(t *testing.T) {
+			values := make(storage.Values)
+			for _, option := range backend.Options {
+				if option.FlagAlias == "db" {
+					values[option.Key] = filepath.Join(testsupport.Workspace(t), "records.db")
 				}
+			}
+			plan, err := catalog.Prepare(backend.Name, values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := plan.Open(context.Background())
+			if err != nil {
+				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
 			api := httpapi.New(store, nil, time.Second)

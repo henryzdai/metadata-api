@@ -1,7 +1,7 @@
 # Development timeline
 
-Dates use Eastern Time. Delivered milestones have implementation and verification
-evidence. Planned work below is not a claim that those features already exist.
+Dates use Eastern Time. Only milestones under Delivered claim completed
+implementation and verification. The sequence below defines the order of work.
 
 ## Delivered
 
@@ -20,7 +20,7 @@ excluding the separately launched E2E server process.
 Complete and verify one runtime feature before starting the next. Each increment
 updates the operator documentation, relevant API contract, tests, and this timeline.
 
-| Order | Planned improvement | Boundary to preserve |
+| Order | Increment | Boundary to preserve |
 | --- | --- | --- |
 | 1 | Registerable compiled storage plugins. | One provider catalog and the complete aggregate storage contract. No dynamic shared-library loading. |
 | 2 | Bounded server work and memory-backed state. | Explicit overload responses and tested limits, not an absolute OOM guarantee. |

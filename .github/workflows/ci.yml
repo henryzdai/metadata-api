@@ -37,7 +37,11 @@ jobs:
       - name: Unit and storage-contract tests with coverage
         shell: bash
         run: |
-          go test -count=1 -shuffle=on -coverpkg=metadata-api/internal/...,metadata-api/cmd/... -coverprofile=coverage.out ./internal/... ./cmd/...
+          mkdir -p artifacts
+          go list -deps ./cmd/... | grep '^metadata-api/' > artifacts/coverage-packages.txt
+          cover_packages="$(paste -sd, artifacts/coverage-packages.txt)"
+          test -n "$cover_packages"
+          go test -count=1 -shuffle=on -coverpkg="$cover_packages" -coverprofile=coverage.out ./internal/... ./cmd/...
           go tool cover -func=coverage.out | tee coverage-summary.txt
           {
             echo '### Unit and storage-contract coverage'

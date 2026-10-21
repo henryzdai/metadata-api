@@ -13,7 +13,8 @@ import (
 )
 
 func TestCRUDAndCreatorIntegrity(t *testing.T) {
-	for _, backend := range []string{"sqlite", "memory"} {
+	for _, description := range backendRegistry(t).Descriptions() {
+		backend := description.Name
 		t.Run(backend, func(t *testing.T) {
 			s := startServer(t, backend, filepath.Join(t.TempDir(), "metadata.db"))
 			ownerResponse := s.maintainer(t, "  Example Owner  ", "OWNER@Example.test")
@@ -88,7 +89,8 @@ func TestCRUDAndCreatorIntegrity(t *testing.T) {
 }
 
 func TestCreatorContactChangesDoNotRewriteApplications(t *testing.T) {
-	for _, backend := range []string{"sqlite", "memory"} {
+	for _, description := range backendRegistry(t).Descriptions() {
+		backend := description.Name
 		t.Run(backend, func(t *testing.T) {
 			s := startServer(t, backend, filepath.Join(t.TempDir(), "metadata.db"))
 			created := s.maintainer(t, "Creator", "creator@example.test")
@@ -276,7 +278,8 @@ func TestBodyLimitBoundary(t *testing.T) {
 }
 
 func TestPaginationAndCreatorFilter(t *testing.T) {
-	for _, backend := range []string{"sqlite", "memory"} {
+	for _, description := range backendRegistry(t).Descriptions() {
+		backend := description.Name
 		t.Run(backend, func(t *testing.T) {
 			s := startServer(t, backend, filepath.Join(t.TempDir(), "metadata.db"))
 			var expected []string
@@ -443,7 +446,8 @@ func TestConcurrentProcessesShareSQLiteCAS(t *testing.T) {
 }
 
 func TestApplicationCreateVersusCreatorDelete(t *testing.T) {
-	for _, backend := range []string{"sqlite", "memory"} {
+	for _, description := range backendRegistry(t).Descriptions() {
+		backend := description.Name
 		t.Run(backend, func(t *testing.T) {
 			s := startServer(t, backend, filepath.Join(t.TempDir(), "metadata.db"))
 			for iteration := 0; iteration < 12; iteration++ {

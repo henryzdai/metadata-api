@@ -85,6 +85,65 @@ func TestOpenAPIResourceBounds(t *testing.T) {
 	openAPIObject(t, document, "paths", "/healthz", "get", "responses", "503")
 }
 
+func TestOpenAPIAccessPolicy(t *testing.T) {
+	document := openAPIDocument(t)
+	scheme := openAPIObject(t, document, "components", "securitySchemes", "BearerAuth")
+	if scheme["type"] != "http" || scheme["scheme"] != "bearer" {
+		t.Fatal("OpenAPI omits the bearer access scheme")
+	}
+	security, ok := document["security"].([]any)
+	if !ok || len(security) != 2 {
+		t.Fatal("OpenAPI does not distinguish token and local startup modes")
+	}
+	bearer, local := false, false
+	for _, alternative := range security {
+		requirement, ok := alternative.(map[string]any)
+		if !ok {
+			t.Fatal("invalid OpenAPI security alternative")
+		}
+		if len(requirement) == 0 {
+			local = true
+		}
+		if _, exists := requirement["BearerAuth"]; exists {
+			bearer = true
+		}
+	}
+	if !bearer || !local {
+		t.Fatal("OpenAPI omits a supported access mode")
+	}
+	for _, collection := range []string{"/v1/maintainers", "/v1/applications"} {
+		for _, endpoint := range []struct {
+			path    string
+			methods []string
+		}{
+			{collection, []string{"get", "post"}},
+			{collection + "/{id}", []string{"get", "put", "delete"}},
+		} {
+			for _, method := range endpoint.methods {
+				operation := openAPIObject(t, document, "paths", endpoint.path, method)
+				role := "read"
+				if method != "get" {
+					role = "write"
+					openAPIObject(t, operation, "responses", "403")
+				}
+				if operation["x-required-role"] != role {
+					t.Errorf("%s %s has the wrong documented role", method, endpoint.path)
+				}
+				openAPIObject(t, operation, "responses", "401")
+			}
+		}
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		probe := openAPIObject(t, document, "paths", path, "get")
+		requirements, ok := probe["security"].([]any)
+		if !ok || len(requirements) != 0 {
+			t.Errorf("%s is not documented as an unauthenticated probe", path)
+		}
+	}
+	openAPIObject(t, document, "components", "responses", "Unauthenticated", "headers", "WWW-Authenticate")
+	openAPIObject(t, document, "components", "responses", "Forbidden")
+}
+
 func openAPIDocument(t *testing.T) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile("../openapi.json")

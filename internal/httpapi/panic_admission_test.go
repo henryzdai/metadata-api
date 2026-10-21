@@ -26,7 +26,7 @@ func TestAdmissionRemainsOwnedWhilePanicRecoveryWritesItsResponse(t *testing.T) 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handler.ServeHTTP(writer, httptest.NewRequest("GET", "/v1/maintainers/"+metadata.NewUUID(), nil))
+		handler.ServeHTTP(writer, localRequest("GET", "/v1/maintainers/"+metadata.NewUUID(), nil))
 	}()
 	awaitEntry(t, entered)
 	assertOverload(t, request(handler, "GET", "/v1/maintainers", "", ""))

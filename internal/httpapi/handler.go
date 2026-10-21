@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"metadata-api/internal/access"
 	"metadata-api/internal/metadata"
 )
 
@@ -22,6 +23,8 @@ type Handler struct {
 	store          metadata.MetadataStore
 	logger         *slog.Logger
 	requestTimeout time.Duration
+	access         access.Policy
+	authority      access.Authority
 	draining       atomic.Bool
 	normal         chan struct{}
 	probes         chan struct{}
@@ -36,6 +39,8 @@ const (
 type Options struct {
 	RequestTimeout time.Duration
 	MaxInFlight    int
+	Access         *access.Policy
+	Authority      access.Authority
 }
 
 func New(store metadata.MetadataStore, logger *slog.Logger, options Options) (*Handler, error) {
@@ -55,11 +60,18 @@ func New(store metadata.MetadataStore, logger *slog.Logger, options Options) (*H
 	if options.MaxInFlight < 1 || options.MaxInFlight > MaxInFlightLimit {
 		return nil, errors.New("max-inflight must be between 1 and 256")
 	}
+	if !options.Access.Valid() {
+		return nil, errors.New("an explicit valid access policy is required")
+	}
+	if !options.Authority.Valid() {
+		return nil, errors.New("a bound local HTTP authority is required")
+	}
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
 	return &Handler{
 		store: store, logger: logger, requestTimeout: options.RequestTimeout,
+		access: *options.Access, authority: options.Authority,
 		normal: make(chan struct{}, options.MaxInFlight), probes: make(chan struct{}, probeSlots),
 	}, nil
 }
@@ -120,9 +132,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := metadata.NewUUID()
 	w.Header().Set("X-Request-ID", requestID)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	writer := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 	start := time.Now()
 	matched := matchRoute(r.URL.Path)
+	method := loggedMethod(r.Method)
 	var admitted chan struct{}
 	defer func() {
 		if admitted != nil {
@@ -137,7 +151,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				status = writer.status
 			}
 			// Panic values can contain request data; retain the stack without logging the value.
-			h.logger.Error("request_panic", "request_id", requestID, "method", r.Method,
+			h.logger.Error("request_panic", "request_id", requestID, "method", method,
 				"route", matched.pattern, "status", status, "response_started", writer.started,
 				"duration_ms", time.Since(start).Milliseconds(), "stack", string(debug.Stack()))
 			if writer.started {
@@ -146,34 +160,69 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			writeProblem(writer, fromError(metadata.NewError(metadata.InternalError, nil)))
 		}
-		h.logger.Info("request", "request_id", requestID, "method", r.Method,
+		h.logger.Info("request", "request_id", requestID, "method", method,
 			"route", matched.pattern, "status", writer.status, "duration_ms", time.Since(start).Milliseconds())
 	}()
 	ctx, cancel := context.WithTimeout(r.Context(), h.requestTimeout)
 	defer cancel()
 	r = r.WithContext(ctx)
 	slots := h.normal
-	if r.Method == http.MethodGet && (matched.kind == "/healthz" || matched.kind == "/readyz") {
+	isProbe := r.Method == http.MethodGet && (matched.kind == "/healthz" || matched.kind == "/readyz")
+	if isProbe {
 		slots = h.probes
 	}
 	select {
 	case slots <- struct{}{}:
 		admitted = slots
 	default:
-		writer.Header().Set("Connection", "close")
+		h.closeRejectedRequest(w, r, requestID, matched.pattern, "overload_read_deadline_failed")
 		writer.Header().Set("Retry-After", "1")
-		if r.Body != nil && r.Body != http.NoBody {
-			// Connection: close alone still permits net/http's post-handler body
-			// drain. Expire reads on this rejected connection, not admitted work.
-			if err := http.NewResponseController(w).SetReadDeadline(time.Now()); err != nil {
-				h.logger.Warn("overload_read_deadline_failed", "request_id", requestID, "route", matched.pattern)
-			}
-		}
 		writeProblem(writer, &problem{
 			status: http.StatusServiceUnavailable, code: "overloaded",
 			message: "The server is handling its maximum number of requests.",
 		})
 		return
+	}
+	if !h.authority.Accepts(r.Host) {
+		h.closeRejectedRequest(w, r, requestID, matched.pattern, "rejected_body_read_deadline_failed")
+		writeProblem(writer, &problem{
+			status: http.StatusBadRequest, code: "invalid_host",
+			message: "Host must identify the local listener.",
+		})
+		return
+	}
+	if !isProbe {
+		principal, err := h.access.Authenticate(authorizationValues(r.Header))
+		if err != nil {
+			h.closeRejectedRequest(w, r, requestID, matched.pattern, "rejected_body_read_deadline_failed")
+			if errors.Is(err, access.ErrAuthenticationNotEnabled) {
+				writeProblem(writer, &problem{
+					status: http.StatusBadRequest, code: "authentication_not_enabled",
+					message: "Authorization is not accepted in local mode.",
+				})
+			} else {
+				writer.Header().Set("WWW-Authenticate", `Bearer realm="metadata-api"`)
+				writeProblem(writer, &problem{
+					status: http.StatusUnauthorized, code: "unauthenticated",
+					message: "A valid Bearer credential is required.",
+				})
+			}
+			return
+		}
+		if (matched.kind == "m1" || matched.kind == "a1") && methodAllowed(matched.allow, r.Method) {
+			action := access.ReadAction()
+			if r.Method != http.MethodGet {
+				action = access.WriteAction()
+			}
+			if !principal.Allows(action) {
+				h.closeRejectedRequest(w, r, requestID, matched.pattern, "rejected_body_read_deadline_failed")
+				writeProblem(writer, &problem{
+					status: http.StatusForbidden, code: "forbidden",
+					message: "The principal cannot perform this operation.",
+				})
+				return
+			}
+		}
 	}
 	if matched.kind == "" {
 		writeProblem(writer, &problem{
@@ -216,6 +265,43 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.maintainers(writer, r, matched)
 	case "a1":
 		h.applications(writer, r, matched)
+	}
+}
+
+func loggedMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete,
+		http.MethodConnect, http.MethodOptions, http.MethodTrace, http.MethodPatch:
+		return method
+	default:
+		return "OTHER"
+	}
+}
+
+func authorizationValues(headers http.Header) []string {
+	var authorization []string
+	for name, values := range headers {
+		if strings.EqualFold(name, "Authorization") {
+			if authorization == nil {
+				authorization = []string{}
+			}
+			if len(values) == 0 {
+				authorization = append(authorization, "")
+			}
+			authorization = append(authorization, values...)
+		}
+	}
+	return authorization
+}
+
+func (h *Handler) closeRejectedRequest(w http.ResponseWriter, r *http.Request, requestID, pattern, warning string) {
+	w.Header().Set("Connection", "close")
+	if r.Body != nil && r.Body != http.NoBody {
+		// Connection: close alone still permits net/http's post-handler drain.
+		// Expire reads only on the rejected connection, without reading its body.
+		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+			h.logger.Warn(warning, "request_id", requestID, "route", pattern)
+		}
 	}
 }
 

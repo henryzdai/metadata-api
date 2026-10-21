@@ -168,6 +168,48 @@ func (request *heldPost) finish(t *testing.T) response {
 	return response{status: result.StatusCode, header: result.Header, body: body}.want(t, http.StatusCreated)
 }
 
+func rejectUnreadPost(t *testing.T, s *server, headers http.Header) response {
+	t.Helper()
+	address := strings.TrimPrefix(s.baseURL, "http://")
+	connection, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var request strings.Builder
+	fmt.Fprintf(&request,
+		"POST /v1/maintainers HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n",
+		address)
+	for name, values := range headers {
+		for _, value := range values {
+			fmt.Fprintf(&request, "%s: %s\r\n", name, value)
+		}
+	}
+	request.WriteString("\r\n")
+	if _, err := io.WriteString(connection, request.String()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatalf("early rejection waited for a body instead of responding: %v", err)
+	}
+	defer result.Body.Close()
+	if result.StatusCode == http.StatusContinue {
+		t.Fatal("rejected request began consuming its body")
+	}
+	if !result.Close {
+		t.Fatal("early rejection kept an unread request connection alive")
+	}
+	body, err := io.ReadAll(io.LimitReader(result.Body, 4<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response{status: result.StatusCode, header: result.Header, body: body}
+}
+
 func backendRegistry(t *testing.T) *storage.Registry {
 	t.Helper()
 	catalog, err := builtin.NewRegistry()
@@ -356,6 +398,10 @@ func (s *server) request(method, path string, body []byte, headers http.Header) 
 	for key, values := range headers {
 		req.Header[key] = append([]string(nil), values...)
 	}
+	return s.send(req)
+}
+
+func (s *server) send(req *http.Request) response {
 	result, err := s.client.Do(req)
 	if err != nil {
 		return response{err: err}

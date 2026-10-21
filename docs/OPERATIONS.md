@@ -1,5 +1,89 @@
 # Operating the server
 
+## Authentication and authorization
+
+The default `--auth-mode local` trusts local clients and requires no credential.
+Supplying Authorization on a non-probe request in this mode is an error, not
+proof that a token was verified.
+
+Use `--auth-mode tokens --auth-file private/tokens.json` for a shared installation.
+The file defines stable principal UUIDs, `read` or `write` roles, and SHA-256 token
+digests. Read allows resource GET/list. Write also allows POST, PUT, and DELETE.
+These permissions cover the whole catalog; Maintainer contacts and creator links
+do not grant ownership or access.
+
+Generate a new configuration with PowerShell 7.2 or later:
+
+```powershell
+New-Item -ItemType Directory -Path .\private -Force | Out-Null
+if (Test-Path .\private\tokens.json) { throw "Refusing to overwrite an existing credential file." }
+$token = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($token))).ToLowerInvariant()
+@{ principals = @(@{ id = [Guid]::NewGuid().ToString(); role = "write"; token_sha256 = @($hash) }) } |
+	ConvertTo-Json -Depth 4 | Set-Content .\private\tokens.json -Encoding utf8
+$token
+```
+
+The last line displays a new credential once. Save it securely for the client.
+Do not commit tokens or credential configuration. The repository ignores
+`private`, but that is not an access-control mechanism.
+
+Restrict the file to its owner and administrators before use. On POSIX, use
+owner-only permissions such as `chmod 600`. On Windows, set an owner/admin-only
+ACL; portable Go mode bits do not verify NTFS permissions.
+
+Start the server:
+
+```powershell
+go run .\cmd\metadata-server --auth-mode tokens --auth-file .\private\tokens.json
+```
+
+In a client terminal, set `$token` to the securely retained credential:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/v1/maintainers -Headers @{ Authorization = "Bearer $token" }
+```
+
+Tokens are canonical unpadded base64url encodings of 32 random bytes. The file
+stores SHA-256 of the UTF-8 token text, not of the decoded bytes. Use cryptographic
+randomness, not a password. A digest cannot prove that the original token had
+adequate entropy.
+
+The file is one strict UTF-8 JSON object with a `principals` array. Each principal
+has exactly `id`, `role`, and `token_sha256`. It is limited to 256 KiB, 128
+principals, and one or two distinct lowercase hexadecimal digests per principal.
+Malformed, duplicate, unknown, case-mismatched, or excessive configuration fails
+before storage initialization or listening. Authentication never silently turns
+off after a load failure.
+
+The file loads once. To rotate, retain the same principal ID and temporarily list
+old and new digests, restart, move clients, then remove the old digest and restart.
+Revocation and role changes also require restart. Never reassign a principal ID
+to a different person or automation. There is no browser login, token issuance
+endpoint, identity-provider integration, hot reload, or tenant isolation.
+
+Missing, malformed, repeated, or invalid credentials return `401 unauthenticated`.
+A reader's mutation returns `403 forbidden` before body decoding or storage access.
+GET `/healthz` and `/readyz` remain generic public probes with their own bounds.
+Metadata and error responses use `Cache-Control: no-store`.
+
+## Transport boundary
+
+Both access modes bind only to literal loopback addresses or the reserved
+`localhost` name. The latter maps directly to loopback without arbitrary DNS
+resolution. Request Host must be local and match the actual listener port;
+unacceptable authorities return `400 invalid_host`. Host may omit the port only
+when the listener uses HTTP's default port 80.
+
+This executable serves loopback HTTP, not public HTTPS. Remote use requires a
+same-host TLS reverse proxy with certificate validation and its own connection
+policy. Preserve Authorization and rewrite upstream Host to the local listener.
+Forwarded identity, address, and scheme headers do not establish trust.
+
+Loopback is not protection from a hostile administrator, compromised local
+client, or someone who can modify the token file or database. Use tokens mode
+when local clients are not all trusted.
+
 ## Resource limits
 
 The server bounds named work and retained state. These limits reduce exhaustion

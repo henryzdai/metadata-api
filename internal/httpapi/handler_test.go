@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"metadata-api/internal/access"
 	"metadata-api/internal/httpapi"
 	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage"
@@ -62,7 +65,7 @@ func TestHTTPCRUDAndConditionalWrites(t *testing.T) {
 			}
 			assertError(t, request(api, "PUT", ownerPath, `{"name":"New","email":"river@example.test"}`, ""), 428, "precondition_required")
 			assertError(t, request(api, "PUT", ownerPath, `{"name":"New","email":"river@example.test"}`, `W/`+ownerTag), 412, "precondition_failed")
-			replace := httptest.NewRequest("PUT", ownerPath, strings.NewReader(`{"name":" Replaced ","email":"river@example.test"}`))
+			replace := localRequest("PUT", ownerPath, strings.NewReader(`{"name":" Replaced ","email":"river@example.test"}`))
 			replace.Header.Set("Content-Type", "application/json")
 			replace.Header.Add("If-Match", `"unknown,with,commas"`)
 			replace.Header.Add("If-Match", `W/`+ownerTag+`, `+ownerTag)
@@ -201,7 +204,7 @@ func TestStrictJSONAndMediaBoundary(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := newMemory(t)
 			api := newHandler(t, store, nil, time.Second)
-			req := httptest.NewRequest("POST", "/v1/maintainers", strings.NewReader(test.body))
+			req := localRequest("POST", "/v1/maintainers", strings.NewReader(test.body))
 			if test.media != "" {
 				req.Header.Set("Content-Type", test.media)
 			}
@@ -217,10 +220,10 @@ func TestStrictJSONAndMediaBoundary(t *testing.T) {
 		})
 	}
 	api := newHandler(t, newMemory(t), nil, time.Second)
-	exact := httptest.NewRequest("POST", "/v1/maintainers", strings.NewReader(good+strings.Repeat(" ", 65536-len(good))))
+	exact := localRequest("POST", "/v1/maintainers", strings.NewReader(good+strings.Repeat(" ", 65536-len(good))))
 	exact.Header.Set("Content-Type", "application/json; charset=utf-8")
 	assertStatus(t, serve(api, exact), 201)
-	repeatedMedia := httptest.NewRequest("POST", "/v1/maintainers", strings.NewReader(good))
+	repeatedMedia := localRequest("POST", "/v1/maintainers", strings.NewReader(good))
 	repeatedMedia.Header.Add("Content-Type", "application/json")
 	repeatedMedia.Header.Add("Content-Type", "application/json")
 	assertError(t, serve(api, repeatedMedia), 415, "unsupported_media_type")
@@ -323,7 +326,7 @@ func TestReadinessTimeoutAndSafeLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	incoming := httptest.NewRequest("GET", "/v1/maintainers/"+string(owner.ID), nil)
+	incoming := localRequest("GET", "/v1/maintainers/"+string(owner.ID), nil)
 	incoming.Header.Set("X-Request-ID", "untrusted-client-marker")
 	response := serve(api, incoming)
 	assertStatus(t, response, 200)
@@ -401,7 +404,7 @@ func TestPanicAfterResponseStartAbortsTheConnection(t *testing.T) {
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		api.ServeHTTP(writer, httptest.NewRequest("GET", "/healthz", nil))
+		api.ServeHTTP(writer, localRequest("GET", "/healthz", nil))
 	}()
 	if recovered != http.ErrAbortHandler {
 		t.Fatalf("partial response did not abort: %v", recovered)
@@ -449,7 +452,7 @@ func (s *faultStore) GetMaintainer(ctx context.Context, _ metadata.MaintainerID)
 }
 
 func request(api http.Handler, method, path, body, tag string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := localRequest(method, path, strings.NewReader(body))
 	if method == "POST" || method == "PUT" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -484,6 +487,9 @@ func assertStatus(t *testing.T, response *httptest.ResponseRecorder, status int)
 	}
 	if status != 204 && response.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("non-JSON response: %#v", response.Header())
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("metadata or error response can be cached")
 	}
 }
 
@@ -524,9 +530,25 @@ func newHandler(t *testing.T, store metadata.MetadataStore, logger *slog.Logger,
 	t.Helper()
 	handler, err := httpapi.New(store, logger, httpapi.Options{
 		RequestTimeout: timeout, MaxInFlight: httpapi.DefaultMaxInFlight,
+		Access: access.LocalPolicy(), Authority: localAuthority(t),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+const localHost = "127.0.0.1:8080"
+
+func localRequest(method, path string, body io.Reader) *http.Request {
+	return httptest.NewRequest(method, "http://"+localHost+path, body)
+}
+
+func localAuthority(t *testing.T) access.Authority {
+	t.Helper()
+	authority, err := access.NewAuthority(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authority
 }

@@ -66,6 +66,7 @@ func TestParserRejectsReservedAliasesAndAbsentCatalog(t *testing.T) {
 	for _, name := range []string{
 		"listen", "storage", "storage-option", "request-timeout", "shutdown-timeout",
 		"max-connections", "max-inflight", "max-maintainers", "max-applications", "max-metadata-bytes", "help", "h",
+		"auth-mode", "auth-file",
 	} {
 		t.Run(name, func(t *testing.T) {
 			provider := memory.Provider()

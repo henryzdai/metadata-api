@@ -150,35 +150,8 @@ func TestRequestAdmissionRejectsWithoutBlockingProbes(t *testing.T) {
 	if rejected.header.Get("Retry-After") != "1" {
 		t.Fatal("admission rejection omitted its retry guidance")
 	}
-	address := strings.TrimPrefix(s.baseURL, "http://")
-	unread, err := net.DialTimeout("tcp", address, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unread.Close()
-	if err := unread.SetDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	_, err = fmt.Fprintf(unread,
-		"POST /v1/maintainers HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n",
-		address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := http.ReadResponse(bufio.NewReader(unread), &http.Request{Method: http.MethodPost})
-	if err != nil {
-		t.Fatalf("overload waited for a body instead of responding: %v", err)
-	}
-	data, err := io.ReadAll(result.Body)
-	result.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	response{status: result.StatusCode, header: result.Header, body: data}.
+	rejectUnreadPost(t, s, nil).
 		wantError(t, http.StatusServiceUnavailable, "overloaded")
-	if !result.Close {
-		t.Fatal("overload kept an unread request connection alive")
-	}
 	s.get(t, "/healthz")
 	s.get(t, "/readyz")
 	created := held.finish(t)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"metadata-api/internal/access"
 	"metadata-api/internal/httpapi"
 	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage"
@@ -20,6 +21,7 @@ type Config struct {
 	MaxConnections  int
 	MaxInFlight     int
 	store           storage.PreparedStore
+	access          *access.Policy
 }
 
 func ParseConfig(args []string, output io.Writer, catalog *storage.Registry) (Config, error) {
@@ -35,6 +37,10 @@ func ParseConfig(args []string, output io.Writer, catalog *storage.Registry) (Co
 	flags.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 10*time.Second, "graceful shutdown bound")
 	flags.IntVar(&cfg.MaxConnections, "max-connections", 128, "maximum accepted connections (1-2048)")
 	flags.IntVar(&cfg.MaxInFlight, "max-inflight", httpapi.DefaultMaxInFlight, "maximum normal HTTP handlers (1-256)")
+	authMode := &singleStringFlag{value: "local"}
+	authFile := &singleStringFlag{}
+	flags.Var(authMode, "auth-mode", "access mode: local or tokens")
+	flags.Var(authFile, "auth-file", "private token-hash JSON file; required only in tokens mode")
 	limits := metadata.DefaultStorePolicy().Limits()
 	flags.IntVar(&limits.MaxMaintainers, "max-maintainers", limits.MaxMaintainers, "maximum stored maintainers (1-1000000)")
 	flags.IntVar(&limits.MaxApplications, "max-applications", limits.MaxApplications, "maximum stored applications (1-1000000)")
@@ -90,37 +96,74 @@ func ParseConfig(args []string, output io.Writer, catalog *storage.Registry) (Co
 	if err != nil {
 		return Config{}, err
 	}
-	if err := cfg.validateRuntime(); err != nil {
+	if _, err := cfg.validateRuntime(); err != nil {
 		return Config{}, err
+	}
+	switch authMode.value {
+	case "local":
+		if authFile.set {
+			return Config{}, errors.New("--auth-file is not supported in local mode")
+		}
+		cfg.access = access.LocalPolicy()
+	case "tokens":
+		if !authFile.set || authFile.value == "" {
+			return Config{}, errors.New("--auth-file is required in tokens mode")
+		}
+		cfg.access, err = access.LoadTokenPolicy(authFile.value)
+		if err != nil {
+			return Config{}, err
+		}
+	default:
+		return Config{}, errors.New("--auth-mode must be local or tokens")
 	}
 	plan, err := catalog.Prepare(*selected, options.values, policy)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.store = plan
-	return cfg, cfg.validate()
+	_, err = cfg.validate()
+	return cfg, err
 }
 
-func (cfg Config) validate() error {
+func (cfg Config) validate() (string, error) {
 	if cfg.store.Name() == "" {
-		return errors.New("storage must be prepared by ParseConfig")
+		return "", errors.New("storage must be prepared by ParseConfig")
+	}
+	if !cfg.access.Valid() {
+		return "", errors.New("access policy must be prepared by ParseConfig")
 	}
 	return cfg.validateRuntime()
 }
 
-func (cfg Config) validateRuntime() error {
-	if cfg.Listen == "" {
-		return errors.New("--listen must not be empty")
+func (cfg Config) validateRuntime() (string, error) {
+	listen, err := access.ParseListenAddress(cfg.Listen)
+	if err != nil {
+		return "", err
 	}
 	if cfg.RequestTimeout <= 0 || cfg.ShutdownTimeout <= 0 {
-		return errors.New("request and shutdown timeouts must be positive")
+		return "", errors.New("request and shutdown timeouts must be positive")
 	}
 	if cfg.MaxConnections < 1 || cfg.MaxConnections > 2048 {
-		return errors.New("max-connections must be between 1 and 2048")
+		return "", errors.New("max-connections must be between 1 and 2048")
 	}
 	if cfg.MaxInFlight < 1 || cfg.MaxInFlight > httpapi.MaxInFlightLimit {
-		return errors.New("max-inflight must be between 1 and 256")
+		return "", errors.New("max-inflight must be between 1 and 256")
 	}
+	return listen, nil
+}
+
+type singleStringFlag struct {
+	value string
+	set   bool
+}
+
+func (f *singleStringFlag) String() string { return f.value }
+
+func (f *singleStringFlag) Set(value string) error {
+	if f.set {
+		return errors.New("duplicate security option")
+	}
+	f.value, f.set = value, true
 	return nil
 }
 

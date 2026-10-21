@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"metadata-api/internal/access"
 	"metadata-api/internal/httpapi"
 	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage/memory"
@@ -33,12 +34,16 @@ func TestOptionsRejectNilStoreAndUnboundedAdmission(t *testing.T) {
 	} {
 		if handler, err := httpapi.New(test.store, nil, httpapi.Options{
 			RequestTimeout: test.timeout, MaxInFlight: test.limit,
+			Access: access.LocalPolicy(), Authority: localAuthority(t),
 		}); err == nil || handler != nil {
 			t.Fatal("invalid options constructed a handler")
 		}
 	}
 	for _, limit := range []int{1, httpapi.MaxInFlightLimit} {
-		if _, err := httpapi.New(store, nil, httpapi.Options{RequestTimeout: time.Second, MaxInFlight: limit}); err != nil {
+		if _, err := httpapi.New(store, nil, httpapi.Options{
+			RequestTimeout: time.Second, MaxInFlight: limit,
+			Access: access.LocalPolicy(), Authority: localAuthority(t),
+		}); err != nil {
 			t.Fatalf("finite supported limit %d failed: %v", limit, err)
 		}
 	}
@@ -52,7 +57,7 @@ func TestNormalAdmissionRejectsBeforeBodyReadsAndKeepsProbesAvailable(t *testing
 	go func() { result <- request(handler, "GET", "/v1/maintainers/"+metadata.NewUUID(), "", "") }()
 	awaitEntry(t, store.entered)
 	body := &unreadBody{}
-	rejected := httptest.NewRequest("POST", "/v1/maintainers", body)
+	rejected := localRequest("POST", "/v1/maintainers", body)
 	rejected.Header.Set("Content-Type", "application/json")
 	response := serve(handler, rejected)
 	assertOverload(t, response)
@@ -76,18 +81,21 @@ func TestOverloadDeadlineFailureIsLoggedWithoutDetails(t *testing.T) {
 	release := make(chan struct{})
 	store := &admissionStore{MetadataStore: newMemory(t), entered: make(chan struct{}, 1), release: release}
 	handler, err := httpapi.New(store, slog.New(slog.NewJSONHandler(&logs, nil)),
-		httpapi.Options{RequestTimeout: time.Minute, MaxInFlight: 1})
+		httpapi.Options{
+			RequestTimeout: time.Minute, MaxInFlight: 1,
+			Access: access.LocalPolicy(), Authority: localAuthority(t),
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	request := httptest.NewRequest("GET", "/v1/maintainers/"+metadata.NewUUID(), nil).WithContext(ctx)
+	request := localRequest("GET", "/v1/maintainers/"+metadata.NewUUID(), nil).WithContext(ctx)
 	responses := make(chan *httptest.ResponseRecorder, 1)
 	go func() { responses <- serve(handler, request) }()
 	awaitEntry(t, store.entered)
 	body := &unreadBody{}
-	rejected := httptest.NewRequest("POST", "/v1/maintainers", body)
+	rejected := localRequest("POST", "/v1/maintainers", body)
 	rejected.Header.Set("Content-Type", "application/json")
 	writer := &deadlineFailureResponse{ResponseRecorder: httptest.NewRecorder()}
 	handler.ServeHTTP(writer, rejected)
@@ -147,7 +155,7 @@ func TestAdmissionReleasesOnCancellationAndDrainDoesNotCancelAcceptedWork(t *tes
 			handler := boundedHandler(t, store, time.Second)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			req := httptest.NewRequest("GET", "/v1/maintainers/"+metadata.NewUUID(), nil).WithContext(ctx)
+			req := localRequest("GET", "/v1/maintainers/"+metadata.NewUUID(), nil).WithContext(ctx)
 			results := make(chan *httptest.ResponseRecorder, 1)
 			go func() { results <- serve(handler, req) }()
 			awaitEntry(t, store.entered)
@@ -203,7 +211,7 @@ func TestAdmissionReleasesAfterStorageFailurePanicDeadlineAndAbort(t *testing.T)
 			handler := boundedHandler(t, newMemory(t), time.Second)
 			for range 5 {
 				recovered := recoverAbort(func() {
-					handler.ServeHTTP(&panicAfterWrite{ResponseWriter: httptest.NewRecorder()}, httptest.NewRequest("GET", path, nil))
+					handler.ServeHTTP(&panicAfterWrite{ResponseWriter: httptest.NewRecorder()}, localRequest("GET", path, nil))
 				})
 				if recovered != http.ErrAbortHandler {
 					t.Fatalf("partial-write panic did not release admission: %v", recovered)
@@ -236,7 +244,10 @@ func TestResourceCapacityMapsTo503WithoutRetryTime(t *testing.T) {
 
 func boundedHandler(t *testing.T, store metadata.MetadataStore, timeout time.Duration) *httpapi.Handler {
 	t.Helper()
-	handler, err := httpapi.New(store, nil, httpapi.Options{RequestTimeout: timeout, MaxInFlight: 1})
+	handler, err := httpapi.New(store, nil, httpapi.Options{
+		RequestTimeout: timeout, MaxInFlight: 1,
+		Access: access.LocalPolicy(), Authority: localAuthority(t),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

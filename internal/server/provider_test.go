@@ -210,13 +210,14 @@ func TestOpenedProviderClosesOnListenerAndOutputFailures(t *testing.T) {
 	}
 	defer func() { _ = listener.Close() }()
 	for _, test := range []struct {
-		name   string
-		listen string
-		output io.Writer
+		name      string
+		listen    string
+		output    io.Writer
+		wantOpens int
 	}{
-		{"invalid listener", "not-an-address", io.Discard},
-		{"occupied listener", listener.Addr().String(), io.Discard},
-		{"output failure", "127.0.0.1:0", brokenWriter{}},
+		{"invalid listener", "not-an-address", io.Discard, 0},
+		{"occupied listener", listener.Addr().String(), io.Discard, 1},
+		{"output failure", "127.0.0.1:0", brokenWriter{}, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := &probe.Recorder{}
@@ -224,13 +225,15 @@ func TestOpenedProviderClosesOnListenerAndOutputFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg := parseWithCatalog(t, catalog, "--storage=probe", "--listen="+test.listen)
+			cfg := parseWithCatalog(t, catalog, "--storage=probe", "--listen=127.0.0.1:0")
+			cfg.Listen = test.listen
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			if err := server.Run(ctx, cfg, test.output, io.Discard); err == nil {
 				t.Fatal("startup failure was ignored")
 			}
-			if !reflect.DeepEqual(recorder.Opens(), []int{7}) || recorder.Closes() != 1 {
+			if len(recorder.Opens()) != test.wantOpens || recorder.Closes() != test.wantOpens ||
+				test.wantOpens == 1 && !reflect.DeepEqual(recorder.Opens(), []int{7}) {
 				t.Fatal("startup failure did not close the selected provider")
 			}
 		})

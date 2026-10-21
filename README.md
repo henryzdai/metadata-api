@@ -34,7 +34,8 @@ volatile storage with `--storage memory`.
 
 Provider options use `--storage-option key=value`. See the
 [storage guide](docs/STORAGE.md) for configuration and compiled plugin registration.
-The [operations guide](docs/OPERATIONS.md) covers resource budgets and SQLite upgrades.
+The [operations guide](docs/OPERATIONS.md) covers token roles, resource budgets, and
+SQLite upgrades. The default local mode trusts loopback clients.
 
 ## Create an application
 
@@ -80,9 +81,10 @@ go test .\e2e -run TestConcurrentWritersAcrossRestart -count=1 -v
 ```mermaid
 flowchart LR
 	entry["CLI entry point"] --> runtime["Server runtime"]
-	runtime -->|injects selected store| api["HTTP handlers"]
+	runtime -->|injects store and policy| api["HTTP handlers"]
 	client["HTTP client"] -->|HTTP| api
-	api -->|CRUD| store["MetadataStore"]
+	api -->|access check| access["Access policy"]
+	api -->|authorized CRUD| store["MetadataStore"]
 	store -.-> sqlite["SQLite adapter"]
 	store -.-> memory["Memory adapter"]
 	sqlite --> database[("Local SQLite file")]
@@ -94,6 +96,7 @@ Dotted edges show alternatives, not replication or fallback.
 The selected adapter owns atomic revision and creator checks.
 The runtime bounds connections, handlers bound active work, and adapters enforce
 stored-data and list-output budgets.
+Host validation, authentication, and role checks precede storage access.
 
 ### Creator relationship
 
@@ -105,6 +108,7 @@ erDiagram
 Each Application has one immutable `maintainer_id`. A Maintainer can be the
 recorded creator of zero or many Applications. Referenced Maintainers cannot be
 deleted, and contact edits do not invalidate Application ETags.
+Access principals are separate from these creator records.
 
 ## Design decisions
 
@@ -121,7 +125,7 @@ what each choice protects; the tradeoffs state what it does not provide.
 | Atomic ETag/If-Match mutations | Reject stale edits rather than silently lose another client's changes. | Clients must read and resolve conflicts. This does not provide exactly-once POST. |
 | Strict input, bounded work/state, deadlines, and safe logs | Limit retained metadata and response materialization while rejecting overload explicitly. | Logical quotas and per-process limits are not hard RSS or disk caps. See the operations guide. |
 | Shared unit contracts plus real-process HTTP E2E | Check backend parity and failures that handler-only tests miss. | Process isolation and cleanup add complexity. Some checks require Linux. |
-| Loopback first; no authentication or TLS | Keep this MVP focused on metadata correctness rather than an identity platform. | Not ready for public exposure. Deployment needs an authenticated TLS boundary, monitoring, and backups. |
+| Loopback HTTP; local or token/read-write policy | Preserve local development and provide explicit access checks without an identity service. | Roles cover the whole catalog. Rotation requires restart; remote deployment still needs a TLS boundary. |
 
 SQLite uses foreign keys, `BEGIN IMMEDIATE`, WAL, and FULL synchronization.
 Success follows commit. Durability depends on storage honoring sync; use
@@ -140,6 +144,7 @@ the MVP.
 | [`internal/server/`](internal/server/) | Configuration, backend selection, listener, and shutdown. |
 | [`internal/metadata/`](internal/metadata/) | Resource models, validation, revisions, and the storage contract. |
 | [`internal/httpapi/`](internal/httpapi/) | Routing, JSON requests and responses, and ETag preconditions. |
+| [`internal/access/`](internal/access/) | Immutable token policy and dataset-wide read/write authorization. |
 | [`internal/storage/`](internal/storage/) | Provider registration and SQLite/memory implementations. |
 | [`internal/storagetest/`](internal/storagetest/) | Shared observable contract for every adapter. |
 | [`e2e/`](e2e/) | Real-process HTTP, concurrency, restart, and shutdown tests. |

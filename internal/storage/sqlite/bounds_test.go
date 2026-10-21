@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"metadata-api/internal/access"
 	"metadata-api/internal/httpapi"
 	"metadata-api/internal/metadata"
 	"metadata-api/internal/storage"
@@ -520,7 +522,14 @@ func assertLegacyRecords(t *testing.T, store *Store, owner metadata.Maintainer, 
 	if err != nil || gotApp != app {
 		t.Fatalf("migration changed application fields: %#v, %v", gotApp, err)
 	}
-	handler, err := httpapi.New(store, nil, httpapi.Options{RequestTimeout: time.Second, MaxInFlight: 1})
+	authority, err := access.NewAuthority(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := httpapi.New(store, nil, httpapi.Options{
+		RequestTimeout: time.Second, MaxInFlight: 1,
+		Access: access.LocalPolicy(), Authority: authority,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +538,7 @@ func assertLegacyRecords(t *testing.T, store *Store, owner metadata.Maintainer, 
 		{"/v1/applications/" + string(app.ID), fmt.Sprintf(`"a1:%s:%d"`, app.ID, app.Revision)},
 	} {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080"+test.path, nil))
 		if response.Code != 200 || response.Header().Get("ETag") != test.tag || !json.Valid(response.Body.Bytes()) {
 			t.Fatalf("migration changed validator: %d %q", response.Code, response.Header().Get("ETag"))
 		}

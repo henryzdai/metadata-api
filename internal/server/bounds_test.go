@@ -120,8 +120,9 @@ func TestRealListenerOverloadClosesUnreadExpectRequestAndPreservesAdmittedBody(t
 			if err := excess.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				t.Fatal(err)
 			}
-			_, err = fmt.Fprint(excess, "POST /v1/maintainers HTTP/1.1\r\nHost: example.test\r\n"+
-				"Content-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n")
+			_, err = fmt.Fprintf(excess, "POST /v1/maintainers HTTP/1.1\r\nHost: %s\r\n"+
+				"Content-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n",
+				strings.TrimPrefix(service.url, "http://"))
 			if err != nil {
 				t.Fatal(err)
 			}

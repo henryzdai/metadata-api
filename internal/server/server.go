@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"time"
 
+	"metadata-api/internal/access"
 	"metadata-api/internal/httpapi"
 )
 
 func Run(ctx context.Context, cfg Config, stdout, stderr io.Writer) (runErr error) {
-	if err := cfg.validate(); err != nil {
+	listen, err := cfg.validate()
+	if err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
@@ -30,18 +32,23 @@ func Run(ctx context.Context, cfg Config, stdout, stderr io.Writer) (runErr erro
 			runErr = errors.New("could not close storage")
 		}
 	}()
-	handler, err := httpapi.New(store, logger, httpapi.Options{
-		RequestTimeout: cfg.RequestTimeout, MaxInFlight: cfg.MaxInFlight,
-	})
-	if err != nil {
-		return err
-	}
-	tcpListener, err := net.Listen("tcp", cfg.Listen)
+	tcpListener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	listener := &connectionListener{Listener: tcpListener, slots: make(chan struct{}, cfg.MaxConnections)}
 	defer func() { _ = listener.Close() }()
+	authority, err := access.NewAuthority(listener.Addr())
+	if err != nil {
+		return err
+	}
+	handler, err := httpapi.New(store, logger, httpapi.Options{
+		RequestTimeout: cfg.RequestTimeout, MaxInFlight: cfg.MaxInFlight,
+		Access: cfg.access, Authority: authority,
+	})
+	if err != nil {
+		return err
+	}
 	// The shutdown signal must not cancel in-flight requests before they can drain.
 	serverCtx, cancelRequests := context.WithCancel(context.Background())
 	defer cancelRequests()

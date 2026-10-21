@@ -97,7 +97,8 @@ func TestStartupFailuresHaveNoListeningEventOrFallback(t *testing.T) {
 	if err := server.Run(context.Background(), base, &stdout, &stderr); err == nil || stdout.Len() != 0 {
 		t.Fatalf("unusable SQLite path did not fail startup: stdout %q, error %v", stdout.String(), err)
 	}
-	base = parse(t, "--storage=memory", "--listen=not-an-address")
+	base = parse(t, "--storage=memory", "--listen=127.0.0.1:0")
+	base.Listen = "not-an-address"
 	if err := server.Run(context.Background(), base, &stdout, &stderr); err == nil || stdout.Len() != 0 {
 		t.Fatalf("invalid listen address did not fail startup: stdout %q, error %v", stdout.String(), err)
 	}
@@ -160,7 +161,8 @@ func TestListenerBoundsHeaders(t *testing.T) {
 	}
 	defer func() { _ = connection.Close() }()
 	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := io.WriteString(connection, "GET /healthz HTTP/1.1\r\nHost: example.test\r\n"); err != nil {
+	if _, err := fmt.Fprintf(connection, "GET /healthz HTTP/1.1\r\nHost: %s\r\n",
+		strings.TrimPrefix(service.url, "http://")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := bufio.NewReader(connection).ReadByte(); !errors.Is(err, io.EOF) {
@@ -173,8 +175,9 @@ func TestListenerBoundsHeaders(t *testing.T) {
 	}
 	defer func() { _ = connection.Close() }()
 	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := io.WriteString(connection,
-		"GET /healthz HTTP/1.1\r\nHost: example.test\r\nX-Large: "+strings.Repeat("x", 32*1024)+"\r\n\r\n"); err != nil {
+	if _, err := fmt.Fprintf(connection,
+		"GET /healthz HTTP/1.1\r\nHost: %s\r\nX-Large: %s\r\n\r\n",
+		strings.TrimPrefix(service.url, "http://"), strings.Repeat("x", 32*1024)); err != nil {
 		t.Fatal(err)
 	}
 	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
@@ -195,7 +198,8 @@ func beginBody(t *testing.T, service *instance, length int) (net.Conn, *bufio.Re
 	}
 	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
 	_, err = fmt.Fprintf(connection,
-		"POST /v1/maintainers HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\nContent-Length: %d\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n", length)
+		"POST /v1/maintainers HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+		strings.TrimPrefix(service.url, "http://"), length)
 	if err != nil {
 		_ = connection.Close()
 		t.Fatal(err)
@@ -271,9 +275,12 @@ func start(t *testing.T, cfg server.Config, name string, durable bool) *instance
 			Storage string `json:"storage"`
 			Durable bool   `json:"durable"`
 		}
-		if err := json.Unmarshal(data, &event); err != nil || event.Event != "listening" ||
+		err := json.Unmarshal(data, &event)
+		host, port, addressErr := net.SplitHostPort(event.Addr)
+		ip := net.ParseIP(host)
+		if err != nil || event.Event != "listening" ||
 			event.Storage != name || event.Durable != durable ||
-			!strings.HasPrefix(event.Addr, "127.0.0.1:") || strings.HasSuffix(event.Addr, ":0") {
+			addressErr != nil || ip == nil || !ip.IsLoopback() || port == "0" {
 			t.Fatalf("startup event = %s, error %v", data, err)
 		}
 		instance.url = "http://" + event.Addr

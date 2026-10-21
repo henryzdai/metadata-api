@@ -5,7 +5,7 @@
 Store application metadata and its creators through a Go JSON API.
 Get full CRUD, SQLite persistence, and safe concurrent edits without a database server.
 
-[API reference](openapi.json) | [Passing E2E run](https://github.com/henryzdai/metadata-api/actions/runs/39508357704) | [Workflow source](.github/workflows/ci.yml)
+[API reference](openapi.json) | [Passing E2E run](https://github.com/henryzdai/metadata-api/actions/runs/39538710232) | [Workflow source](.github/workflows/ci.yml)
 
 ## Quick start
 
@@ -158,6 +158,8 @@ Real-process HTTP tests check observable guarantees:
 - Creating an Application while deleting its creator cannot leave an orphan.
 - Editing a creator's contact details does not rewrite its Applications or invalidate their ETags.
 - Committed SQLite data survives a process restart; memory-backed data does not.
+- Capacity and overload rejections preserve existing records and admitted work.
+- Read-only credentials cannot mutate metadata, and token rotation preserves the configured principal's role.
 
 For logs and coverage:
 
@@ -176,7 +178,9 @@ passed unit tests, shared storage contracts, real-process HTTP E2E, the race
 detector, and SIGTERM shutdown. It measured **91.3% statement coverage** across
 `internal` and `cmd`, excluding the separate E2E server process.
 
-Open the [verification job](https://github.com/henryzdai/metadata-api/actions/runs/39508357704/job/118922898078)
+The [post-MVP Linux CI run](https://github.com/henryzdai/metadata-api/actions/runs/39538710232)
+also passes the storage-plugin, resource-bound, and access-control tests.
+Open its [verification job](https://github.com/henryzdai/metadata-api/actions/runs/39538710232/job/119021260628)
 and expand **Real-process HTTP E2E** to see the API test output.
 
 On Windows, the SIGTERM test skips. To run the race detector locally, use
@@ -187,7 +191,11 @@ On Windows, the SIGTERM test skips. To run the race detector locally, use
 The verified MVP is preserved at [`mvp-v1`](https://github.com/henryzdai/metadata-api/tree/mvp-v1).
 The [development timeline](docs/EVOLUTION.md) separates that baseline from
 post-MVP improvements and records their decisions, tradeoffs, and evidence.
+This delivery includes compiled storage plugins, resource bounds, and
+authentication/authorization. Idempotent POST creation and rate limiting are
+deferred and are not implemented.
 
 Initial MVP implementation, review, documentation, and publication spanned about
 eight elapsed hours, including pauses. The initial prototype took about 1.5 hours
-of that span. These are elapsed spans, not person-hours.
+of that span. The three post-MVP increments added roughly three elapsed hours.
+These are elapsed spans, not person-hours.

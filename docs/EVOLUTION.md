@@ -1,7 +1,8 @@
 # Development timeline
 
 Dates use Eastern Time. Only milestones under Delivered claim completed
-implementation and verification. The sequence below defines the order of work.
+implementation and verification. This delivery stops after authentication and
+authorization.
 
 ## Delivered
 
@@ -21,18 +22,18 @@ excluding the separately launched E2E server process.
 Post-MVP coverage follows the executable's module dependency graph. Shared test
 runners and test-only providers do not inflate that application coverage.
 
-## Post-MVP sequence
+## Deferred
 
-Complete and verify one runtime feature before starting the next. Each increment
-updates the operator documentation, relevant API contract, tests, and this timeline.
+Each delivered feature passed its checks before the next began. Work stopped
+after access control rather than adding partial retry or rate-limit mechanisms.
+The following improvements were designed but not implemented.
 
-| Order | Increment | Boundary to preserve |
-| --- | --- | --- |
-| 1 | Registerable compiled storage plugins. | One provider catalog and the complete aggregate storage contract. No dynamic shared-library loading. |
-| 2 | Bounded server work and memory-backed state. | Explicit overload responses and tested limits, not an absolute OOM guarantee. |
-| 3 | Authentication and authorization. | Authenticated principals are separate from creator contact records. Security configuration must fail explicitly. |
-| 4 | Retry-safe POST creation. | Creation and replay evidence must commit atomically. Scope, payload conflicts, expiry, capacity, and restart behavior must be defined. |
-| 5 | Rate limiting. | State and limiter scope must be bounded. Rejections need useful retry information. |
+| Improvement | Current behavior and required work |
+| --- | --- |
+| Retry-safe POST creation. | POST remains ordinary creation. A retry can create another Application. A future implementation must commit creation and bounded replay records atomically, with defined scope, payload conflicts, expiry, and restart behavior. |
+| Rate limiting. | Connection and in-flight request limits bound concurrent work, not requests per second. A future limiter needs bounded identity state, explicit scope, and useful retry information. |
 
-Existing validation, revision checks, timeouts, and shutdown behavior remain
-regression gates throughout. A new backend or policy does not get a weaker contract.
+No receipt schema, idempotency response headers, rate buckets, or corresponding
+configuration flags were added. SQLite remains at schema version 2.
+The delivered server retains validation, revision checks, request timeouts, and
+graceful shutdown.
